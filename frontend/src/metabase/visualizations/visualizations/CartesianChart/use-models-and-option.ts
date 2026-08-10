@@ -38,7 +38,7 @@ export function useModelsAndOption(
     onRender,
     isDashboard,
   }: VisualizationProps,
-  containerRef: React.RefObject<HTMLDivElement>,
+  containerRef: React.RefObject<HTMLDivElement | null>,
   containerSize: Pick<VisualizationProps, "width" | "height">,
 ) {
   const tc = useTranslateContent();
