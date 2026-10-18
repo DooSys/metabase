@@ -6,7 +6,6 @@
   TODO -- does this belong HERE or in the `permissions` module?"
   (:require
    [clojure.set :as set]
-   [clojure.walk :as walk]
    [metabase.api.common :as api]
    ;; legacy usage -- do not use in new code
    ^{:clj-kondo/ignore [:discouraged-namespace]} [metabase.legacy-mbql.normalize :as mbql.normalize]
@@ -239,15 +238,9 @@
 (defn- referenced-card-ids
   "Return the union of all the `:query-permissions/referenced-card-ids` sets anywhere in the query."
   [query]
-  (let [all-ids (atom #{})]
-    (walk/postwalk
-     (fn [form]
-       (when (map? form)
-         (when-let [ids (not-empty (:query-permissions/referenced-card-ids form))]
-           (swap! all-ids set/union ids)))
-       form)
-     query)
-    (not-empty @all-ids)))
+  (some->> (match/match-many query
+             {:query-permissions/referenced-card-ids ids} (not-empty ids))
+           (into #{} cat)))
 
 (defn- native-query-perms
   [query]
