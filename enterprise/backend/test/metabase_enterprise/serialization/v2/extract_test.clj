@@ -2654,13 +2654,14 @@
             (is (=? {:serdes/meta      [{:model "CustomVizPlugin"
                                          :id    "test-plugin"}]
                      :identifier       "test-plugin"
-                     :enabled          true
                      :created_at       string?}
                     ser))
+            (testing "an enabled plugin writes no `enabled`: it is the default, as on upload"
+              (is (not (contains? ser :enabled))))
             (testing "the bundle's files are the resource files beside the YAML"
               (is (= (update-vals files seq) (update-vals (:serdes/resources ser) seq))))
             (testing "the file holds nothing the bundle derives"
-              (is (= #{:serdes/meta :identifier :enabled :serdes/resources :created_at} (set (keys ser)))))
+              (is (= #{:serdes/meta :identifier :serdes/resources :created_at} (set (keys ser)))))
             (testing "has no dependencies"
               (is (empty? (serdes/deserialization-dependencies ser))))))))))
 
