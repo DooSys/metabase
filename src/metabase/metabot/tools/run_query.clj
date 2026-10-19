@@ -617,6 +617,11 @@
     (check-private-conversation!)
     (let [{:keys [query saved-card]} (stored-query query_id allow-non-sql?)
           runnable                   (runnable-query query_id query allow-non-sql?)]
+      ;; A query the conversation holds came from construct_notebook_query, which judged it, or from the user's
+      ;; viewing context, which nothing judged: the rows go to the model either way. A saved question was judged
+      ;; in [[saved-question]]; SQL is left to the SQL tools' own gates.
+      (when (and (shared/curated-only?) (nil? saved-card) (not (:checked-sql runnable)))
+        (curation/check-curated-query! (str "query " query_id) (:query runnable)))
       (when-not (or allow-non-sql? (:checked-sql runnable))
         (throw (refusal (str "You may only run SQL queries, and query " query_id " is not one. "
                              (recovery-hint allow-non-sql?)))))
