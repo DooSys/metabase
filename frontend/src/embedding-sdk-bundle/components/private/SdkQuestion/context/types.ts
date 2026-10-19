@@ -1,5 +1,6 @@
 import type { PropsWithChildren } from "react";
 
+import type { SdkComponentName } from "embedding-sdk-bundle/analytics/component-events";
 import type { LoadQuestionHookResult } from "embedding-sdk-bundle/hooks/private/use-load-question";
 import type { SdkEntityToken } from "embedding-sdk-bundle/types";
 import type { SdkCollectionId } from "embedding-sdk-bundle/types/collection";
@@ -201,6 +202,9 @@ export type SdkQuestionProviderProps = PropsWithChildren<
         },
         defaultNavigate: () => Promise<void>,
       ) => Promise<void>;
+
+      /** The public SDK component name, forwarded for ready/error signaling. */
+      sdkComponentName?: SdkComponentName;
     }
 >;
 

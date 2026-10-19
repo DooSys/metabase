@@ -156,6 +156,7 @@ export const _SdkQuestion = ({
   clickActionMode,
   navigateToNewCard,
   onDrillThrough,
+  sdkComponentName,
 
   height,
   width,
@@ -220,6 +221,7 @@ export const _SdkQuestion = ({
         navigateToNewCard={navigateToNewCard}
         onDrillThrough={onDrillThrough}
         onVisualizationChange={onVisualizationChange}
+        sdkComponentName={sdkComponentName}
       >
         {children ?? (
           <SdkQuestionDefaultView

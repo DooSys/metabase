@@ -165,6 +165,7 @@ function InteractiveQuestionInner(props: InteractiveQuestionInternalProps) {
       questionId={resolvedQuestionId}
       token={token}
       title={title}
+      sdkComponentName="InteractiveQuestion"
       withDownloads={withDownloads}
       isSaveEnabled={isSaveEnabled}
       withAlerts={withAlerts}
