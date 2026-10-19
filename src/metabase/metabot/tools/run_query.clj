@@ -8,11 +8,13 @@
    [metabase.driver.util :as driver.u]
    [metabase.lib-be.core :as lib-be]
    [metabase.lib.core :as lib]
+   [metabase.metabot.curation :as curation]
    [metabase.metabot.db :as metabot.db]
    [metabase.metabot.query-execution :as query-execution]
    [metabase.metabot.scope :as scope]
    [metabase.metabot.settings :as metabot.settings]
    [metabase.metabot.tmpl :as te]
+   [metabase.metabot.tools.error :as tools.error]
    [metabase.metabot.tools.shared :as shared]
    [metabase.metabot.tools.shared.llm-shape :as llm-shape]
    [metabase.metabot.tools.sql.common :as sql.common]
@@ -165,6 +167,10 @@
       (when (some-> card mi/can-read?)
         (when (= :metric (:type card))
           (throw (metric-refusal query-id card)))
+        ;; The rows go to the model: a curated-only Metabot runs a saved question only when `read_resource` would
+        ;; read it.
+        (when (shared/curated-only?)
+          (curation/check-curated-subject! (str "question " card-id) ["card" card-id]))
         {:saved-card card
          :query      {:lib/type :mbql/query
                       :database (:database_id card)
@@ -631,6 +637,10 @@
           ;; The exception message embeds the warehouse's error text unquoted.
           (= :query-failed error)
           {:output (query-failed-output query-error)}
+
+          ;; a declared recoverable error keeps its recovery steps by reaching the tool runtime as thrown
+          (= :recoverable (:class (tools.error/classify e)))
+          (throw e)
 
           :else
           (tools.u/handle-agent-or-api-error e))))))
