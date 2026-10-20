@@ -89,10 +89,14 @@ export type SdkQuestionProps = SdkQuestionDefaultViewProps &
   // by removing it from this Omit and restoring the prop forwarding below.
   Omit<
     SdkQuestionProviderProps,
-    "componentPlugins" | "initialVisualization"
+    "componentPlugins" | "initialVisualization" | "sdkComponentName"
   > & {
     plugins?: SdkQuestionProviderProps["componentPlugins"];
   };
+
+/** Internal type — adds back the props omitted from the public boundary. */
+type SdkQuestionInternalProps = SdkQuestionProps &
+  Pick<SdkQuestionProviderProps, "sdkComponentName">;
 
 /**
  * @interface
@@ -166,7 +170,7 @@ export const _SdkQuestion = ({
   withChartTypeSelector = true,
   withEditorButton = true,
   onVisualizationChange,
-}: SdkQuestionProps): JSX.Element | null => {
+}: SdkQuestionInternalProps): JSX.Element | null => {
   const drillThroughQuestionProps: DrillThroughQuestionProps = {
     height,
     width,
