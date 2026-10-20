@@ -14,6 +14,7 @@
    [metabase.lib.schema.metadata :as lib.schema.metadata]
    [metabase.queries.schema :as queries.schema]
    [metabase.query-processor.db :as query-processor.db]
+   [metabase.query-processor.middleware.row-restricted-metadata :as row-restricted-metadata]
    [metabase.query-processor.reducible :as qp.reducible]
    [metabase.query-processor.schema :as qp.schema]
    ;; still passes state via the store's miscellaneous-value slot; general-cached-value migration pending
@@ -75,6 +76,9 @@
                  ;; Native queries are only skipped when parameter values differ from template tag defaults.
                  ;; See QUE2-502 for details.
                  (not (:qp/skip-result-metadata-persistence query))
+                 ;; A row-restricted run (sandbox, impersonation, DB routing) computes fingerprints over the rows the
+                 ;; current user sees. Persisting them would hand that subset's statistics to every reader of the Card.
+                 (not (row-restricted-metadata/row-restricted? query))
                  (driver.u/supports? driver/*driver* :nested-queries (lib.metadata/database query))
                  card-id
                  ;; don't want to update metadata when we use a Card as a source Card.
