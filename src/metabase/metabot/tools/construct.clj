@@ -565,24 +565,21 @@
         (tree-seq coll? seq parsed-query)))
 
 (defn- readable-card-by-ref
-  "The Card `ref` names, when it exists and the current user can read it; nil otherwise, which leaves a missing or
-  unreadable Card to resolve's own answer."
-  [ref]
+  "The Card `card-ref` names, when it exists and the current user can read it; nil otherwise, which leaves a missing
+  or unreadable Card to resolve's own answer."
+  [card-ref]
   (when-let [card (cond
-                    (string? ref)                           (metabot.db/card-by-entity-id ref)
-                    serdes.resolve/*numeric-ids-allowed?*   (metabot.db/card ref))]
+                    (string? card-ref)                    (metabot.db/card-by-entity-id card-ref)
+                    serdes.resolve/*numeric-ids-allowed?* (metabot.db/card card-ref))]
     (when (mi/can-read? card)
       card)))
 
 (defn- check-curated-portable-sources!
   "Under [[shared/curated-only?]], before repair reads the query: reject it when its first-stage source, a Card it
-  reads, or a table it references is neither curated nor reachable from curated content it references (see
-  `metabase.metabot.curation`). Repair's errors name the columns of the tables and cards they touch, so an
-  uncurated source has to be refused before it runs. This is the coarse gate: it reads only what the portable
-  query names, and [[check-curated-query-sources!]] applies the full rule once the query resolves. A metric this
-  Metabot may use authorizes its own sources ([[curation/metric-reach]]), so a query on a curated metric's raw
-  table passes here and is judged for real after resolve. `table-ids` are the tables
-  [[check-source-table-query-permissions!]] resolved."
+  reads, or a table it references is neither curated nor reachable from curated content it references. This is
+  the coarse gate: it reads only what the portable query names and judges those ids by the one rule
+  ([[curation/uncurated-sources]]); [[check-curated-query-sources!]] applies the same rule to the resolved query.
+  `table-ids` are the tables [[check-source-table-query-permissions!]] resolved."
   [metadata-provider parsed-query table-ids]
   (when (shared/curated-only?)
     (let [cards        (into [] (keep readable-card-by-ref) (source-card-refs parsed-query))
@@ -591,7 +588,7 @@
                              (portable-metric-refs parsed-query))
           ;; a metric Card used as a source is judged as a metric, as the full rule judges it
           metric-ids   (into metric-ids (comp (filter #(= :metric (:type %))) (map :id)) cards)
-          card-ids     (into [] (comp (remove #(= :metric (:type %))) (map :id)) cards)
+          card-ids     (into #{} (comp (remove #(= :metric (:type %))) (map :id)) cards)
           source-card  (some-> (or (first-stage-source-card-eid parsed-query)
                                    (when serdes.resolve/*numeric-ids-allowed?*
                                      (first-stage-numeric-source-card parsed-query)))
@@ -604,27 +601,12 @@
                                            (resolve.mp/import-resolver metadata-provider
                                                                        permission-aware-content-store)
                                            fk))
-          curated      (curation/curated-ids (concat (map #(vector "table" %) table-ids)
-                                                     (map #(vector "card" %) card-ids)))
-          curated?     (fn [model id] (contains? curated [model id]))
-          reach        (curation/metric-reach metadata-provider metric-ids)
-          covered      (into (curation/covered-table-ids metadata-provider
-                                                         (filter #(curated? "table" %) table-ids)
-                                                         (filter #(curated? "card" %) card-ids))
-                             (:tables reach))
-          source-ok?   (fn [model id]
-                         (or (curated? model id)
-                             (contains? (get-in reach [:sources (keyword model)]) id)
-                             (and (= model "card") (contains? (:usable reach) id))))
-          uncurated    (distinct
-                        (concat (when (and source-table (not (source-ok? "table" source-table)))
-                                  [["table" source-table]])
-                                (when (and source-card (not (source-ok? "card" source-card)))
-                                  [["card" source-card]])
-                                (for [id table-ids :when (not (or (curated? "table" id) (contains? covered id)))]
-                                  ["table" id])
-                                (for [id card-ids :when (not (or (= id source-card) (source-ok? "card" id)))]
-                                  ["card" id])))]
+          uncurated    (curation/uncurated-sources metadata-provider
+                                                   {:source-table source-table
+                                                    :source-card  source-card
+                                                    :table        (set table-ids)
+                                                    :card         card-ids
+                                                    :metric       metric-ids})]
       (when (seq uncurated)
         (uncurated-source! uncurated)))))
 
@@ -877,6 +859,8 @@
         ;; Permission checks happen before repair/resolve so the metadata-provider-backed pipeline
         ;; never inspects table/card metadata that the current user cannot use.
         checked     (check-source-table-query-permissions! mp parsed)
+        ;; repair's errors name the columns of the tables and cards they touch, so an uncurated source is refused
+        ;; before repair runs
         _curated    (check-curated-portable-sources! mp parsed checked)]
     ;; Everything after the MP is built can surface LLM-input errors (lib.schema validation
     ;; in resolve, missing-column complaints from lib/query in `result-columns-for-query`,

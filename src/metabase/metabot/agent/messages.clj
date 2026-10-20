@@ -208,7 +208,8 @@
                           (ctx-fn context))
         content         (prompts/build-system-message-content
                          profile
-                         (merge {:sql_dialect (user-context/extract-sql-dialect context)}
+                         (merge {:sql_dialect  (user-context/extract-sql-dialect context)
+                                 :curated_only (boolean (:curated_only context))}
                                 profile-context)
                          tools
                          (:capabilities context))]

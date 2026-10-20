@@ -40,14 +40,15 @@
 
 (defrecoverable not-curated!
   "The entity exists and the user can read it, but this Metabot only uses curated content and the entity isn't
-  curated. Raised by `read_resource`, `list_available_fields`, `get_field_values`, `run_query`, and the tools that
-  take an entity id, so one sentence covers every direct read."
+  curated. One sentence covers every direct read, whichever tool makes it."
   {:payload [:map {:closed true}
              ;; a URI or a short description such as "table 12": the entity is named by the handle the agent used,
              ;; never by its own name
              [:label :string]]}
   [{:keys [label]}]
   {:message  (str "`" label "` is not available: this Metabot only uses curated content (verified, official, or "
-                  "Library content).")
+                  "Library content, and authoritative tables).")
    :recovery [{:uses #{"search"}
-               :text "Call `search` to find curated tables, models, or metrics and use one of those instead."}]})
+               :text (str "Call `search` to find curated tables, models, or metrics and use one of those instead. "
+                          "Do not retry an entity `search` already returned and this check refused; tell the user "
+                          "it is not curated.")}]})

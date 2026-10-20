@@ -6,7 +6,9 @@
   initialization. This avoids re-executing queries."
   (:require
    [metabase.interestingness.core :as interestingness]
+   [metabase.metabot.curation :as curation]
    [metabase.metabot.scope :as scope]
+   [metabase.metabot.tools.recoverable.common :as recoverable.common]
    [metabase.metabot.tools.shared :as shared]
    [metabase.metabot.tools.util :as metabot.tools.u]
    [metabase.util.malli :as mu]
@@ -80,6 +82,14 @@ Do not use headers (##). Do not list statistics. Do not analyze series separatel
   [{:keys [chart_config_id deep]} :- [:map {:closed true}
                                       [:chart_config_id :string]
                                       [:deep {:optional true :default true} [:maybe :boolean]]]]
+  (let [chart-config (resolve-chart-config-from-memory chart_config_id)]
+    ;; The series rows reach the model as a query's rows would: a curated-only Metabot analyzes a chart only when
+    ;; `run_query` could run its query. SQL on screen is left to the SQL gates, as in `run_query`; a chart that
+    ;; carries no query can't be judged and is refused.
+    (when (and chart-config (shared/curated-only?))
+      (if-let [query (:query chart-config)]
+        (curation/check-curated-query! (str "chart " chart_config_id) query {:native :allow})
+        (recoverable.common/not-curated! {:label (str "chart " chart_config_id)}))))
   (try
     (if-let [chart-config (resolve-chart-config-from-memory chart_config_id)]
       (do

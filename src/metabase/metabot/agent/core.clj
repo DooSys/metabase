@@ -17,6 +17,7 @@
    [metabase.metabot.agent.streaming :as streaming]
    [metabase.metabot.capabilities :as capabilities]
    [metabase.metabot.context :as metabot.context]
+   [metabase.metabot.curation :as curation]
    [metabase.metabot.db :as metabot.db]
    [metabase.metabot.metadata-perms :as metabot.perms]
    [metabase.metabot.schema :as metabot.schema]
@@ -526,7 +527,10 @@
   does (see [[turn-input-parts]])."
   [{:keys [messages state metabot profile-id context tracking-opts conversation-id request-canceled-chan]
     external-memory-atom :memory-atom}]
-  (let [context      (assign-context-ids context)
+  (let [context      (-> (assign-context-ids context)
+                         ;; the prompt and the viewing context read the verdict the tools are bound to; constant
+                         ;; per Metabot, so the cached prompt prefix stays stable
+                         (assoc :curated_only (curation/curated-only? metabot profile-id)))
         ;; Resolve the profile once (its nlq availability redirect probes the index): reuse it for both the
         ;; prompt and the tools so they can't disagree about whether the curated library tool is offered.
         profile      (or (profiles/get-profile profile-id)

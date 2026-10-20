@@ -7,7 +7,8 @@
    [metabase.lib.metadata :as lib.metadata]
    [metabase.lib.types.isa :as lib.types.isa]
    [metabase.metabot.db :as metabot.db]
-   [metabase.util :as u]))
+   [metabase.util :as u]
+   [metabase.util.log :as log]))
 
 (defn handle-agent-error
   "Return an agent output for agent errors, re-throw `e` otherwise.
@@ -201,7 +202,8 @@
 (defn card-definition-table-ids
   "The ids of the Tables the definition of the card with ID `card-id` reads, plus the Tables one FK hop away from
   them, following source Cards to their own definitions (ten levels at most), or nil when the card is missing or
-  its query can't be built. A native definition names no Tables: its result columns say which Tables it exposes."
+  its query can't be built. A native definition names no Tables, and its result metadata can map a column to any
+  Field, so it contributes none: a field read on a SQL card is judged on the tables of the cards it reads, if any."
   [card-id]
   (when-let [card (get-card card-id)]
     (let [mp (lib-be/application-database-metadata-provider (:database_id card))]
@@ -210,22 +212,20 @@
           (if (or (empty? todo) (= depth 10))
             tables
             (let [queries (into []
-                                (keep (fn [{:keys [dataset-query result-metadata]}]
-                                        (when-let [query (some->> dataset-query (lib/query mp))]
-                                          (if (lib/any-native-stage? query)
-                                            ;; result columns keep their stored spelling in lib's card metadata
-                                            {:native-tables (into #{} (keep #(or (:table-id %) (:table_id %))) result-metadata)}
-                                            {:query query}))))
+                                (keep (fn [{:keys [dataset-query]}]
+                                        (let [query (some->> dataset-query (lib/query mp))]
+                                          (when (and query (not (lib/any-native-stage? query)))
+                                            query))))
                                 (lib.metadata/bulk-metadata mp :metadata/card todo))
-                  refs    (if-let [qs (not-empty (into [] (keep :query) queries))]
-                            (lib/all-referenced-entity-ids qs {:include-implicitly-joinable? true})
-                            {})
-                  seen    (into seen todo)]
-              (recur (into #{} (remove seen) (:card refs))
-                     seen
-                     (-> tables (into (:table refs)) (into (mapcat :native-tables) queries))
+                  refs    (if (seq queries)
+                            (lib/all-referenced-entity-ids queries {:include-implicitly-joinable? true})
+                            {})]
+              (recur (into #{} (remove (into seen todo)) (:card refs))
+                     (into seen todo)
+                     (into tables (:table refs))
                      (inc depth)))))
-        (catch Throwable _
+        (catch Exception e
+          (log/debug e "Can't walk the card's definition; treating its tables as unknown")
           nil)))))
 
 (defn metric-query

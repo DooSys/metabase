@@ -555,9 +555,10 @@
     (list-result :database-models models query-params)))
 
 (defn- curated-table-schemas
-  "The schemas of the Database with `db-id` that hold at least one curated active Table."
+  "The schemas of the Database with `db-id` that hold at least one curated active Table the current user can read."
   [db-id]
-  (let [tables  (metabot.db/active-tables-for-database db-id)
+  (let [_       (perms/prime-table-perms-cache {:db-ids #{db-id}})
+        tables  (filter mi/can-read? (metabot.db/active-tables-for-database db-id))
         curated (curation/curated-ids (map (fn [{:keys [id]}] ["table" id]) tables))]
     (into #{}
           (comp (filter (fn [{:keys [id]}] (contains? curated ["table" id])))
@@ -659,14 +660,16 @@
 
 (defn- curated-only-details
   "Under [[shared/curated-only?]], trim a table's or card's details `result` to what this Metabot may use: the
-   embedded metrics `metric/{id}` would deny are dropped, and a card's exported definition (`:query_json`) is
-   withheld, since it names the tables the definition reads rather than the result columns the card covers."
+   embedded metrics `metric/{id}` would deny are dropped; a card's exported definition (`:query_json`) is
+   withheld, since it names the tables the definition reads rather than the result columns the card covers; and
+   the related tables listed without their columns are dropped, since the `table/{id}` read they invite is denied
+   for an uncurated table, while the ones listed with columns are joinable as shown."
   [result]
   (cond-> result
     (and (shared/curated-only?) (seq (get-in result [:structured-output :metrics])))
     (update-in [:structured-output :metrics] usable-metrics)
     (shared/curated-only?)
-    (update :structured-output dissoc :query_json)))
+    (update :structured-output dissoc :query_json :related_tables_without_fields :related_tables_total)))
 
 (defn- table-details
   "Shared `entity-details/get-table-details` call for both /table/{id} and /table/{id}/fields.
@@ -1057,11 +1060,9 @@
         nil))))
 
 (defn- check-curated-uri!
-  "Under [[shared/curated-only?]], reject a URI naming an entity that isn't curated, without naming the entity. Runs
-   before the handler, so a denied read does none of its work: `table/{id}/fields/{field}` would otherwise compute
-   and persist field values and a fingerprint for a table this Metabot may not use. The handler's own existence,
-   read, and resource-database checks run first, so a missing or routing-destination entity still reads as missing
-   rather than uncurated, and whether an unreadable one is curated isn't revealed."
+  "Under [[shared/curated-only?]], reject a URI naming an entity that isn't curated, without naming the entity. The
+   handler's own existence, read, and resource-database checks run first, so a missing or routing-destination
+   entity still reads as missing rather than uncurated, and whether an unreadable one is curated isn't revealed."
   [uri segments]
   (when (shared/curated-only?)
     (when-let [[model id :as subject] (curation-subject segments)]
@@ -1089,6 +1090,8 @@
   (let [{:keys [segments query-params]} (parse-uri uri)]
     (check-numeric-id-segment! uri segments)
     (->> (tools/with-entity (uri-entity segments)
+           ;; before the handler, so a denied read does none of its work: `table/{id}/fields/{field}` would
+           ;; otherwise compute and persist field values and a fingerprint for a table this Metabot may not use
            (check-curated-uri! uri segments)
            (match/match-one segments
              ;; Navigation

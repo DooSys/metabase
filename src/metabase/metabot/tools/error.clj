@@ -353,3 +353,9 @@
   [e]
   (or (get (ex-data e) error-key)
       {:class :unrecoverable :code :internal}))
+
+(defn recoverable?
+  "Whether `e` is a declared recoverable error (see [[classify]]): one whose recovery steps reach the model when it
+  is thrown through to the tool runtime."
+  [e]
+  (= :recoverable (:class (classify e))))

@@ -165,12 +165,13 @@
     ;; A question the user can't read is treated like one that doesn't exist, so its id tells them nothing.
     (let [card (metabot.db/card card-id)]
       (when (some-> card mi/can-read?)
+        ;; The rows go to the model: a curated-only Metabot runs a saved question only when `read_resource` would
+        ;; read it. Judged before the metric refusal, which names the metric's source.
+        (when (shared/curated-only?)
+          (curation/check-curated-subject! (str "question " card-id)
+                                           [(if (= :metric (:type card)) "metric" "card") card-id]))
         (when (= :metric (:type card))
           (throw (metric-refusal query-id card)))
-        ;; The rows go to the model: a curated-only Metabot runs a saved question only when `read_resource` would
-        ;; read it.
-        (when (shared/curated-only?)
-          (curation/check-curated-subject! (str "question " card-id) ["card" card-id]))
         {:saved-card card
          :query      {:lib/type :mbql/query
                       :database (:database_id card)
@@ -398,8 +399,8 @@
 ;; can go then. See BOT-2318.
 
 (defn- runnable-query
-  "`{:query :checked-sql :sql-card?}`: the serialized MBQL 5 form of the query stored under `query-id`, which state
-   may hold as MBQL 4 (the user's viewing context) or MBQL 5, and for a SQL query the SQL it compiled to.
+  "`{:query :inline-sql? :checked-sql :sql-card?}`: the serialized MBQL 5 form of the query stored under `query-id`,
+   which state may hold as MBQL 4 (the user's viewing context) or MBQL 5, and for a SQL query the SQL it compiled to.
    A SQL query passes [[check-sql-runnable!]] before anything else touches it, and [[check-read-only-select!]] once
    it is serialized.
    A notebook query that reads a SQL question Metabot saved ([[metabot-sql-card?]]) is a SQL query here too, marked
@@ -436,6 +437,7 @@
         (when sql-card?
           (check-sql-runnable! query-id (:database normalized) true allow-non-sql?))
         {:query       serialized
+         :inline-sql? inline-sql?
          :sql-card?   sql-card?
          :checked-sql (when (or inline-sql? sql-card?)
                         (check-read-only-select! query-id serialized sql-card? allow-non-sql?))}))))
@@ -617,14 +619,15 @@
     (check-private-conversation!)
     (let [{:keys [query saved-card]} (stored-query query_id allow-non-sql?)
           runnable                   (runnable-query query_id query allow-non-sql?)]
-      ;; A query the conversation holds came from construct_notebook_query, which judged it, or from the user's
-      ;; viewing context, which nothing judged: the rows go to the model either way. A saved question was judged
-      ;; in [[saved-question]]; SQL is left to the SQL tools' own gates.
-      (when (and (shared/curated-only?) (nil? saved-card) (not (:checked-sql runnable)))
-        (curation/check-curated-query! (str "query " query_id) (:query runnable)))
       (when-not (or allow-non-sql? (:checked-sql runnable))
         (throw (refusal (str "You may only run SQL queries, and query " query_id " is not one. "
                              (recovery-hint allow-non-sql?)))))
+      ;; A query the conversation holds came from construct_notebook_query, which judged it, or from the user's
+      ;; viewing context, which nothing judged: the rows go to the model either way. A saved question was judged
+      ;; in [[saved-question]]. SQL the query holds itself is left to the SQL gates above; a notebook query over a
+      ;; SQL question is judged like any other.
+      (when (and (shared/curated-only?) (nil? saved-card) (not (:inline-sql? runnable)))
+        (curation/check-curated-query! (str "query " query_id) (:query runnable)))
       (let [page                                 (execute-page! query_id runnable (or row_limit default-row-limit)
                                                                 allow-non-sql?)
             {:keys [output returned truncated?]} (result-output query_id page saved-card)]
@@ -644,7 +647,7 @@
           {:output (query-failed-output query-error)}
 
           ;; a declared recoverable error keeps its recovery steps by reaching the tool runtime as thrown
-          (= :recoverable (:class (tools.error/classify e)))
+          (tools.error/recoverable? e)
           (throw e)
 
           :else

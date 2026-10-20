@@ -239,7 +239,7 @@
     (catch Throwable e
       (let [error (tools.error/classify e)]
         (cond
-          (= :recoverable (:class error))
+          (tools.error/recoverable? e)
           {:item    item-args
            :error   error
            :output  (tools.error/recoverable-text error (:tool-names ctx))

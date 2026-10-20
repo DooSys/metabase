@@ -7,6 +7,7 @@
    [clojure.string :as str]
    [metabase.lib-be.core :as lib-be]
    [metabase.lib.core :as lib]
+   [metabase.metabot.curation :as curation]
    [metabase.metabot.query-export :as query-export]
    [metabase.metabot.tmpl :as te]
    [metabase.metabot.tools.entity-details :as entity-details]
@@ -128,14 +129,47 @@
 ;; llm-shape (the output-side XML formatters), mirroring what the Python AI service did
 ;; via HTTP callbacks.
 
+(defn- curation-subject
+  "The `[model id]` pair a saved viewing-context `entity` is judged by under a curated-only Metabot (see
+  [[curation/subject-curated?]]), or nil for one the gate doesn't apply to."
+  [{:keys [id] :as entity}]
+  (when (pos-int? id)
+    (case (effective-context-type entity)
+      "table"     ["table" id]
+      "model"     ["card" id]
+      "question"  (when-not (native-query-item? entity) ["card" id])
+      "metric"    ["metric" id]
+      "dashboard" ["dashboard" id]
+      nil)))
+
+(defn- uncurated-viewed-entity?
+  "Whether `entity`, which the current user can read, is one a curated-only Metabot may not use. `:curated_only` on
+  the entity carries the session's verdict (see [[format-viewing-context]])."
+  [entity]
+  (boolean
+   (when (:curated_only entity)
+     (when-let [subject (curation-subject entity)]
+       (not (curation/subject-curated? subject))))))
+
 (defn- fetch-and-format
-  "Fetch entity details and format with llm-shape. Falls back to format-simple-entity on failure."
+  "Fetch entity details and format with llm-shape. Falls back to format-simple-entity on failure. Under a
+  curated-only Metabot, an entity the user can read but the Metabot may not use is rendered by its handle only, and
+  a curated card's exported definition (`:query_json`) is withheld, as `read_resource` withholds it."
   [entity preamble details-fn format-fn]
   (try
     (let [{:keys [structured-output]} (details-fn)]
-      (if structured-output
-        (te/lines preamble (format-fn structured-output))
-        (format-simple-entity entity)))
+      (cond
+        (nil? structured-output)
+        (format-simple-entity entity)
+
+        ;; after the details fetch, whose read checks ran, so an unreadable entity's curation isn't revealed
+        (uncurated-viewed-entity? entity)
+        (te/lines "The user is currently looking at an item that is not curated, which this Metabot may not use:"
+                  (format-simple-entity entity))
+
+        :else
+        (te/lines preamble (format-fn (cond-> structured-output
+                                        (:curated_only entity) (dissoc :query_json))))))
     (catch Exception e
       (let [status-code (:status-code (ex-data e))]
         (cond
@@ -302,7 +336,7 @@
   (str/join "\n\n"
             (for [item (:user_is_viewing context)]
               (try
-                (format-entity item)
+                (format-entity (cond-> item (:curated_only context) (assoc :curated_only true)))
                 (catch Exception e
                   (log/error "Error formatting viewing context item:" (:type item) (ex-message e))
                   "")))))

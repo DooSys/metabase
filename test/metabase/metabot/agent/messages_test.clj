@@ -313,6 +313,14 @@
       (is (=? {:content #(not (str/blank? %))}
               (messages/build-system-message {} profile {}))))))
 
+(deftest ^:parallel build-system-message-curated-only-test
+  (testing "a curated-only session's prompt says so, and an unrestricted one's doesn't"
+    (let [profile {:prompt-template "internal.selmer"
+                   :model           "claude-sonnet-4-5-20250929"}
+          content #(:content (messages/build-system-message % profile {}))]
+      (is (str/includes? (content {:curated_only true}) "Curated content only"))
+      (is (not (str/includes? (content {}) "Curated content only"))))))
+
 (deftest build-system-message-excludes-user-context-test
   (testing "viewing context does not leak into the system message (it is injected into the last user message)"
     (let [context {:user_is_viewing [{:type "dashboard" :id 1 :name "Sales Dashboard"}]}

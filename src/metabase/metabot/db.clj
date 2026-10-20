@@ -464,10 +464,11 @@
   (t2/select-one :model/Table :id table-id {:from [(warehouse-schema-overlay/table-query)]}))
 
 (mu/defn active-table-with-columns
-  "The `columns` of the active Table with `table-id`, or nil."
+  "The `columns` of the active Table with `table-id`, as users see it (`is_published`, `collection_id`, and the
+  other user-settable columns come from the user settings), or nil."
   [columns :- [:sequential :keyword]
    table-id :- ::lib.schema.id/table]
-  (t2/select-one columns :id table-id :active true))
+  (t2/select-one columns :id table-id :active true {:from [(warehouse-schema-overlay/table-query)]}))
 
 (mu/defn table-database-id
   "The Database ID of the Table with `table-id`."
@@ -1060,6 +1061,16 @@
   "The Table ID of the Segment with `id`, or nil."
   [id :- ::lib.schema.id/segment]
   (t2/select-one-fn :table_id :model/Segment :id id))
+
+(mu/defn live-measure-table-id
+  "The Table ID of the Measure with `id`, or nil when it is missing or in the trash."
+  [id :- ::lib.schema.id/measure]
+  (t2/select-one-fn :table_id :model/Measure :id id :archived false))
+
+(mu/defn live-segment-table-id
+  "The Table ID of the Segment with `id`, or nil when it is missing or in the trash."
+  [id :- ::lib.schema.id/segment]
+  (t2/select-one-fn :table_id :model/Segment :id id :archived false))
 
 (mu/defn measure-entity-id
   "The entity ID of the Measure with `id`."

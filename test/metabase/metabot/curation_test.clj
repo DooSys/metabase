@@ -100,3 +100,14 @@
                  source))
           (is (= (->strs source) (->strs indexed))
               "source-of-truth agrees with the index's precomputed curated column"))))))
+
+(deftest ^:parallel curated-only-profiles-test
+  (testing "the verdict follows the Metabot's flag, except for the profiles whose discovery or output is outside the
+            rule"
+    (let [metabot {:use_verified_content true}]
+      (is (true? (metabot.curation/curated-only? metabot :internal)))
+      (is (true? (metabot.curation/curated-only? metabot "embedding_next")))
+      (doseq [profile [:nlq :nlq-fallback :sql :internal-sql]]
+        (is (false? (metabot.curation/curated-only? metabot profile)) (name profile)))
+      (is (false? (metabot.curation/curated-only? {:use_verified_content false} :internal)))
+      (is (false? (metabot.curation/curated-only? nil :internal))))))
