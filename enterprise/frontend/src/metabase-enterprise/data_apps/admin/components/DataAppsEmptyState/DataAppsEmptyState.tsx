@@ -24,6 +24,6 @@ export const DataAppsEmptyState = () => (
     >
       <Icon name="app" size={48} c="border-neutral" />
     </Flex>
-    <Text c="text-disabled">{t`Your data apps will appear here`}</Text>
+    <Text c="text-secondary">{t`Your data apps will appear here`}</Text>
   </Flex>
 );

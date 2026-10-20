@@ -245,7 +245,7 @@ const GroupRow = ({
             aria-label={t`Remove ${name}`}
             onClick={() => onRemove(group)}
           >
-            <Icon name="close" c="text-disabled" size={16} />
+            <Icon name="close" c="text-secondary" size={16} />
           </UnstyledButton>
         </Flex>
       </Box>
