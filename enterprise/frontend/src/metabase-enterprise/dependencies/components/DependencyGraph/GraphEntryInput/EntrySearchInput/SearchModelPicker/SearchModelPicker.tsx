@@ -2,6 +2,7 @@ import { useDisclosure } from "@mantine/hooks";
 import { t } from "ttag";
 
 import { useSearchQuery } from "metabase/api";
+import { useHasTokenFeature } from "metabase/common/hooks";
 import {
   ActionIcon,
   Box,
@@ -12,14 +13,16 @@ import {
   Popover,
   Stack,
 } from "metabase/ui";
-import type { SearchModel } from "metabase-types/api";
+import { useListDataAppsQuery } from "metabase-enterprise/api";
+
+import type { EntrySearchModel } from "../../constants";
 
 import S from "./SearchModelPicker.module.css";
 import { getSearchModelItems } from "./utils";
 
 type SearchModelPickerProps = {
-  searchModels: SearchModel[];
-  onSearchModelsChange: (models: SearchModel[]) => void;
+  searchModels: EntrySearchModel[];
+  onSearchModelsChange: (models: EntrySearchModel[]) => void;
 };
 
 export function SearchModelPicker({
@@ -51,8 +54,8 @@ export function SearchModelPicker({
 }
 
 type SearchModelPopoverProps = {
-  searchModels: SearchModel[];
-  onSearchModelsChange: (models: SearchModel[]) => void;
+  searchModels: EntrySearchModel[];
+  onSearchModelsChange: (models: EntrySearchModel[]) => void;
 };
 
 function SearchModelPopover({
@@ -65,16 +68,19 @@ function SearchModelPopover({
     calculate_available_models: true,
     context: "dependencies",
   });
-  const items = data ? getSearchModelItems(data) : [];
+  const hasDataApps = useHasTokenFeature("data-apps");
+  const { data: dataApps = [], isLoading: isLoadingDataApps } =
+    useListDataAppsQuery(undefined, { skip: !hasDataApps });
+  const items = data ? getSearchModelItems(data, dataApps) : [];
 
   const handleChange = (value: string[]) => {
-    // Unjustified type cast. FIXME
-    onSearchModelsChange(value as SearchModel[]);
+    // the checkboxes' values are the items' models, which Checkbox.Group reports as strings
+    onSearchModelsChange(value as EntrySearchModel[]);
   };
 
   return (
     <Box w="15rem" p="lg">
-      {isLoading ? (
+      {isLoading || isLoadingDataApps ? (
         <Center>
           <Loader />
         </Center>

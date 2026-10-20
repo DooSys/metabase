@@ -44,11 +44,11 @@
     (let [list-apps (api.macros/find-route-fn 'metabase-enterprise.data-apps.api :get "/")]
       (mt/with-current-user (mt/user->id :rasta)
         (list-apps {} {})
-        (doseq [[query expected] [[{} [{:name "birds" :display_name "Birds"
+        (doseq [[query expected] [[{} [{:id (:id app) :name "birds" :display_name "Birds"
                                         :resource_collection_id (:resource_collection_id app)}
-                                       {:name "disabled" :display_name "Disabled"
+                                       {:id (:id disabled) :name "disabled" :display_name "Disabled"
                                         :resource_collection_id (:resource_collection_id disabled)}]]
-                                  [{:available true} [{:name "birds" :display_name "Birds"
+                                  [{:available true} [{:id (:id app) :name "birds" :display_name "Birds"
                                                        :resource_collection_id (:resource_collection_id app)}]]]]
           (is (= expected (list-apps {} query))))))))
 
@@ -79,6 +79,10 @@
             (mt/user-http-request user-id :get (if allowed? 200 403) "apps/birds/bundle")
             (mt/with-current-user user-id
               (is (= allowed? (boolean (mi/can-read? app)))))
+            (is (= allowed? (contains? (t2/select-pks-set :model/DataApp
+                                                          {:where [:in :id (data-apps/visible-data-app-filter-select
+                                                                            {:user-id user-id :is-superuser? admin?})]})
+                                       (:id app))))
             (mt/with-current-user user-id
               (let [request {:route-params {:name "birds"} :metabase-user-id user-id :is-superuser? admin?}]
                 (if allowed?
@@ -296,7 +300,7 @@
           (perms/revoke-collection-permissions! group-id collection-id)
           (mt/user-http-request :rasta :get 403 "apps/birds")
           (resources/ensure-resources! app)
-          (is (= {:name "birds" :display_name "Birds" :resource_collection_id collection-id}
+          (is (= {:id (:id app) :name "birds" :display_name "Birds" :resource_collection_id collection-id}
                  (mt/user-http-request :rasta :get 200 "apps/birds"))))))))
 
 (deftest tenant-users-cannot-inherit-app-access-test

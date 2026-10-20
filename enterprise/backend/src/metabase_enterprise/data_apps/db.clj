@@ -203,6 +203,25 @@
     (t2/select :model/DataAppGroupAssignment :data_app_id [:in app-ids])
     []))
 
+(defn data-app-ids-select
+  "A HoneySQL query of the ids of every DataApp."
+  []
+  ^:allow-subquery {:select [:id] :from [(t2/table-name :model/DataApp)]})
+
+(mu/defn assigned-data-app-ids-select
+  "A HoneySQL query of the ids of the DataApps assigned to a group of the User with `user-id`, none when they are a
+  tenant user."
+  [user-id :- ms/PositiveInt]
+  ^:allow-subquery {:select [:assignment.data_app_id]
+                    :from   [[(t2/table-name :model/DataAppGroupAssignment) :assignment]]
+                    :join   [[:permissions_group_membership :membership]
+                             [:= :membership.group_id :assignment.permission_group_id]
+                             [:core_user :member]
+                             [:= :member.id :membership.user_id]]
+                    :where  [:and
+                             [:= :membership.user_id user-id]
+                             [:= :member.tenant_id nil]]})
+
 (defn insert-assignments!
   "Assign groups to an app. The unique constraint rejects concurrent duplicates."
   [app-id group-ids]

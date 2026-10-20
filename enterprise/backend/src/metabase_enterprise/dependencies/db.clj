@@ -9,6 +9,7 @@
    [metabase.app-db.core :as mdb]
    [metabase.collections.models.collection :as collection]
    [metabase.collections.models.collection.root :as collection.root]
+   [metabase.data-apps.core :as data-apps]
    [metabase.lib.schema.id :as lib.schema.id]
    [metabase.models.interface :as mi]
    [metabase.permissions.core :as perms]
@@ -64,7 +65,8 @@
     sandboxed users.
   - Table: filters by table visibility permissions. Tables are NOT filtered by active/visibility_type regardless
     of `include-archived-items`, so dependencies broken by dropped or hidden tables stay visible.
-  - Transform: analysts can view any transform they have source view permission to."
+  - Transform: analysts can view any transform they have source view permission to.
+  - Data app: the apps the user can read, none without the data apps feature."
   [entity-type-field entity-id-field {:keys [user-id is-superuser? is-data-analyst? include-archived-items]
                                       :or   {include-archived-items :exclude}}]
   (into [:or]
@@ -168,7 +170,14 @@
                                   (case include-archived-items
                                     :exclude [:= archived-column false]
                                     :only    [:= archived-column true]
-                                    :all     nil)]}]])))))
+                                    :all     nil)]}]])
+
+                    :model/DataApp
+                    (when-let [visible-ids (data-apps/visible-data-app-filter-select {:user-id       user-id
+                                                                                      :is-superuser? is-superuser?})]
+                      [:and
+                       [:= entity-type-field (name entity-type)]
+                       [:in entity-id-field visible-ids]])))))
         deps.dependency-types/dependency-type->model))
 
 (defn- broken-entities-expr
@@ -305,9 +314,10 @@
                    :sandbox :sandboxes
                    :segment :segment
                    :measure :measure
-                   :action :action)
+                   :action :action
+                   :data-app :data_app)
      :name-column (case entity-type
-                    :table :entity.display_name
+                    (:table :data-app) :entity.display_name
                     :sandbox [:cast :entity.id (if (= :mysql (mdb/db-type)) :char :text)]
                     :entity.name)
      :location-column (case entity-type
@@ -325,7 +335,8 @@
                                   :else
                                   (:name (collection.root/root-collection-with-ui-details (action-root-namespace false)))]]
                         :sandbox [:cast :entity.id (if (= :mysql (mdb/db-type)) :char :text)]
-                        (:segment :measure) :table.display_name)}))
+                        (:segment :measure) :table.display_name
+                        :data-app nil)}))
 
 (defn- item-query-join
   "The join and join-filter for `query-type`, restricting the joined-in dependency/finding-error rows to those
@@ -605,6 +616,21 @@
   [action-ids :- [:sequential ::lib.schema.id/action]]
   (t2/select-fn->fn :action_id :dataset_query :model/QueryAction :action_id [:in action-ids]))
 
+(mu/defn cards-in-collections
+  "The `:id` and `:collection_id` of the Cards in the Collections with `collection-ids`."
+  [collection-ids :- [:sequential ::lib.schema.id/collection]]
+  (t2/select [:model/Card :id :collection_id] :collection_id [:in collection-ids]))
+
+(mu/defn actions-in-collections
+  "The `:id` and `:collection_id` of the Actions in the Collections with `collection-ids`."
+  [collection-ids :- [:sequential ::lib.schema.id/collection]]
+  (t2/select [:model/Action :id :collection_id] :collection_id [:in collection-ids]))
+
+(mu/defn resource-collection-data-app-ids
+  "The IDs of the DataApps whose resource collection is one of the Collections with `collection-ids`."
+  [collection-ids :- [:sequential ::lib.schema.id/collection]]
+  (t2/select-pks-set :model/DataApp :resource_collection_id [:in collection-ids]))
+
 (mu/defn card
   "The Card with `card-id`, or nil."
   [card-id :- ::lib.schema.id/card]
@@ -833,6 +859,11 @@
   []
   (t2/exists? :model/DependencyStatus :terminal false :next_retry_at [:not= nil]))
 
+(def ^:private calculation-columns
+  "The columns a dependency calculation reads, for the entity types whose rows hold much more: a data app's bundle can
+  be megabytes."
+  {:data-app [:id :resource_collection_id]})
+
 (mu/defn instances-for-dependency-calculation
   "Up to `batch-size` instances of the entity type `entity-type` without a DependencyStatus, or whose status is
   stale or below `current-version`, is not terminal, and whose retry time has passed at `now`; stale ones first."
@@ -843,9 +874,11 @@
   (let [model          (deps.dependency-types/dependency-type->model entity-type)
         table-name     (t2/table-name model)
         id-field       (keyword (name table-name) "id")
-        table-wildcard (keyword (name table-name) "*")]
+        table-columns  (if-let [columns (calculation-columns entity-type)]
+                         (mapv #(keyword (name table-name) (name %)) columns)
+                         [(keyword (name table-name) "*")])]
     (t2/select model
-               {:select    [table-wildcard]
+               {:select    table-columns
                 :from      table-name
                 :left-join [:dependency_status [:and
                                                 [:= :dependency_status.entity_id id-field]

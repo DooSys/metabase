@@ -178,7 +178,8 @@
         (with-redefs [data-app.config/supported-app-version 2]
           (testing "a regular user is never told about the outdated app in a list"
             (doseq [url ["apps" "apps?available=true"]]
-              (is (= [{:name "current" :display_name "Current"
+              (is (= [{:id   (t2/select-one-pk :model/DataApp :name "current")
+                       :name "current" :display_name "Current"
                        :resource_collection_id (t2/select-one-fn :resource_collection_id :model/DataApp :name "current")}]
                      (mt/user-http-request :rasta :get 200 url)))))
           (testing "for a regular user, opening an outdated app is a 409 that says what to do"
@@ -187,7 +188,8 @@
                        :message    #"This app was built for version 1 of data apps.*"}
                       (mt/user-http-request :rasta :get 409 url)))))
           (testing "the current app still opens"
-            (is (= {:name "current" :display_name "Current"
+            (is (= {:id   (t2/select-one-pk :model/DataApp :name "current")
+                    :name "current" :display_name "Current"
                     :resource_collection_id (t2/select-one-fn :resource_collection_id :model/DataApp :name "current")}
                    (mt/user-http-request :rasta :get 200 "apps/current")))
             (is (str/includes?

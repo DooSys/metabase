@@ -1,6 +1,6 @@
 import { t } from "ttag";
 
-import type { SearchResponse } from "metabase-types/api";
+import type { DataApp, SearchResponse } from "metabase-types/api";
 
 import {
   ENABLED_SEARCH_MODELS,
@@ -9,7 +9,10 @@ import {
 
 import type { SearchModelItem } from "./types";
 
-export function getSearchModelItems(data: SearchResponse): SearchModelItem[] {
+export function getSearchModelItems(
+  data: SearchResponse,
+  dataApps: DataApp[],
+): SearchModelItem[] {
   const allLabels: Record<EnabledSearchModel, string> = {
     table: t`Tables`,
     transform: t`Transforms`,
@@ -27,5 +30,9 @@ export function getSearchModelItems(data: SearchResponse): SearchModelItem[] {
   }));
 
   const availableModels = data.available_models ?? [];
-  return allItems.filter((item) => availableModels.includes(item.value));
+  const items = allItems.filter((item) => availableModels.includes(item.value));
+
+  return dataApps.length > 0
+    ? [...items, { value: "data-app", label: t`Data apps` }]
+    : items;
 }

@@ -51,7 +51,8 @@
    :sandbox   [:table :table_id]
    :segment   [:name :description :created_at :creator :creator_id :table :table_id]
    :measure   [:name :description :created_at :creator :creator_id :table :table_id]
-   :action    [:name :description :type :model_id :parameters :created_at :creator :creator_id :collection :collection_id]})
+   :action    [:name :description :type :model_id :parameters :created_at :creator :creator_id :collection :collection_id]
+   :data-app  [:name :display_name :description :created_at]})
 
 (defn- format-subentity [entity]
   (case (t2/model entity)
@@ -62,7 +63,8 @@
 
 (mr/def ::usages
   [:map-of
-   [:enum :table :snippet :transform :dashboard :document :sandbox :segment :question :model :metric :measure :action]
+   [:enum :table :snippet :transform :dashboard :document :sandbox :segment :question :model :metric :measure :action
+    :data-app]
    ::deps.dependency-types/entity-id])
 
 (mr/def ::dependent-error
@@ -161,6 +163,13 @@
     [:type [:= :action]]
     [:data (fields-for :action)]]])
 
+(mr/def ::data-app-entity
+  [:merge ::base-entity
+   [:map
+    [:id   ms/PositiveInt]
+    [:type [:= :data-app]]
+    [:data (fields-for :data-app)]]])
+
 (mr/def ::entity
   [:multi {:dispatch :type}
    [:table     [:ref ::table-entity]]
@@ -172,7 +181,8 @@
    [:sandbox   [:ref ::sandbox-entity]]
    [:segment   [:ref ::segment-entity]]
    [:measure   [:ref ::measure-entity]]
-   [:action    [:ref ::action-entity]]])
+   [:action    [:ref ::action-entity]]
+   [:data-app  [:ref ::data-app-entity]]])
 
 (def ^:private Entity
   "Any dependency-tracked entity `entity-value` accepts, hydrated the way `hydrate-entities` hydrates it."
@@ -186,7 +196,8 @@
    :metabase-enterprise.sandbox.schema/sandbox
    :metabase.segments.schema/segment
    :metabase.measures.schema/measure
-   ::actions.schema/action])
+   ::actions.schema/action
+   :metabase-enterprise.data-apps.schema/data-app])
 
 (mu/defn- entity-value :- ::entity
   [entity-type :- ::deps.dependency-types/dependency-types
@@ -231,7 +242,8 @@
    :sandbox   [:id :table_id]
    :segment   [:id :name :description :created_at :creator_id :table_id]
    :measure   [:id :name :description :created_at :creator_id :table_id]
-   :action    [:id :name :description :type :model_id :parameters :created_at :creator_id :collection_id]})
+   :action    [:id :name :description :type :model_id :parameters :created_at :creator_id :collection_id]
+   :data-app  [:id :name :display_name :description :created_at]})
 
 (defn- current-user-visibility
   "The current user, as the `:visible` filter-spec opts consumed by `metabase-enterprise.dependencies.db`.
@@ -342,7 +354,8 @@
                  (map #(collection.root/hydrate-root-collection
                         %
                         (collection.root/root-collection-with-ui-details
-                         (dependencies.db/action-root-namespace (nil? (:model_id %)))))))))
+                         (dependencies.db/action-root-namespace (nil? (:model_id %)))))))
+    :data-app entities))
 
 (defn- fetch-and-hydrate-nodes
   "Fetches and hydrates entities for the given nodes.
@@ -413,8 +426,8 @@
   [entity]
   (let [data (:data entity)]
     (case (:type entity)
-      :table   (:display_name data)
-      :sandbox nil
+      (:table :data-app) (:display_name data)
+      :sandbox           nil
       (:name data))))
 
 (defn- entity-location

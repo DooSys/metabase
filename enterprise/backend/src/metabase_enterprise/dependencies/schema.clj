@@ -15,6 +15,7 @@
    [:document  {:optional true} [:set ::documents.schema/document.id]]
    [:sandbox   {:optional true} [:set ::lib.schema.id/sandbox]]
    [:segment   {:optional true} [:set ::lib.schema.id/segment]]
+   [:action    {:optional true} [:set ::lib.schema.id/action]]
    [:unresolved-table {:optional true} [:set [:map
                                               [:schema {:optional true} :string]
                                               [:table :string]]]]])

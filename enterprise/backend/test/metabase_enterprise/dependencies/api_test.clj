@@ -2910,3 +2910,74 @@
             (testing "a search for the data-actions root name finds the action"
               (is (matches? "Data actions"))
               (is (not (matches? "Our analytics"))))))))))
+
+(defn- data-app-card
+  "A question on venues in the data app resource collection with `collection-id`."
+  [collection-id]
+  (assoc (basic-card "Bird sightings" :venues) :collection_id collection-id))
+
+(deftest graph-data-app-test
+  (testing "GET /api/ee/dependencies/graph shows what a data app depends on, and counts the app as a card's dependent"
+    (mt/with-premium-features #{:dependencies :data-apps}
+      (mt/with-temp [:model/DataApp {app-id :id collection-id :resource_collection_id}
+                     {:name "birds" :display_name "Birds" :description "Sightings" :bundle_path "birds.js"}
+                     :model/Card {card-id :id} (data-app-card collection-id)]
+        (mt/with-model-cleanup [:model/Dependency :model/DependencyStatus]
+          (deps.test/synchronously-run-backfill!)
+          (let [{:keys [nodes edges]} (mt/user-http-request :crowberto :get 200 "ee/dependencies/graph"
+                                                            :id app-id
+                                                            :type "data-app")
+                node (fn [node-type node-id]
+                       (m/find-first #(= [node-type node-id] ((juxt :type :id) %)) nodes))]
+            (is (=? {:data {:name "birds" :display_name "Birds" :description "Sightings"}}
+                    (node "data-app" app-id)))
+            (is (=? {:dependents_count {:data-app 1}}
+                    (node "card" card-id)))
+            (is (some? (node "table" (mt/id :venues))))
+            (is (contains? (into #{} (map (juxt :from_entity_type :from_entity_id :to_entity_type :to_entity_id)) edges)
+                           ["data-app" app-id "card" card-id]))))))))
+
+(deftest graph-data-app-dependents-test
+  (testing "GET /api/ee/dependencies/graph/dependents lists the data apps a user can read, disabled ones too"
+    (mt/with-temp [:model/DataApp {app-id :id collection-id :resource_collection_id}
+                   {:name "birds" :display_name "Birds" :bundle_path "birds.js" :enabled false}
+                   :model/Card {card-id :id} (data-app-card collection-id)
+                   :model/PermissionsGroup {group-id :id} {}]
+      (mt/with-model-cleanup [:model/Dependency :model/DependencyStatus]
+        (deps.test/synchronously-run-backfill!)
+        (perms/grant-collection-read-permissions! (perms/all-users-group) collection-id)
+        (let [dependent-ids (fn [user]
+                              (->> (mt/user-http-request user :get 200 "ee/dependencies/graph/dependents"
+                                                         :id card-id
+                                                         :type "card"
+                                                         :dependent-types "data-app")
+                                   (into #{} (map :id))))]
+          (mt/with-premium-features #{:dependencies :data-apps}
+            (testing "an admin sees every app"
+              (is (= #{app-id} (dependent-ids :crowberto))))
+            (testing "a user sees the apps assigned to one of their groups"
+              (is (= #{} (dependent-ids :rasta)))
+              (perms/add-user-to-group! (mt/user->id :rasta) group-id)
+              (t2/insert! :model/DataAppGroupAssignment {:data_app_id app-id :permission_group_id group-id})
+              (is (= #{app-id} (dependent-ids :rasta)))))
+          (mt/with-premium-features #{:dependencies}
+            (testing "nobody sees an app without the data apps feature"
+              (is (= #{} (dependent-ids :crowberto))))))))))
+
+(deftest unreferenced-data-app-test
+  (testing "GET /api/ee/dependencies/graph/unreferenced lists data apps and finds them by their display name"
+    (mt/with-premium-features #{:dependencies :data-apps}
+      (mt/with-temp [:model/DataApp {app-id :id} {:name "birds" :display_name "Bird sightings unreftest" :bundle_path "birds.js"}]
+        (mt/with-model-cleanup [:model/Dependency :model/DependencyStatus]
+          (deps.test/synchronously-run-backfill!)
+          (let [unreferenced (fn [& params]
+                               (->> (apply mt/user-http-request :crowberto :get 200 "ee/dependencies/graph/unreferenced"
+                                           :query "unreftest"
+                                           params)
+                                    :data
+                                    (into #{} (map (juxt :type :id (comp :display_name :data))))))]
+            (is (= #{["data-app" app-id "Bird sightings unreftest"]}
+                   (unreferenced :types "data-app" :sort-column "location")))
+            (testing "by default"
+              (is (= #{["data-app" app-id "Bird sightings unreftest"]}
+                     (unreferenced))))))))))

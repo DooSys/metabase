@@ -2,8 +2,10 @@ import { useCallback } from "react";
 import { t } from "ttag";
 
 import { useConfirmation, useToast } from "metabase/common/hooks";
+import { PLUGIN_DEPENDENCIES } from "metabase/plugins";
 import { Link } from "metabase/router";
 import { ActionIcon, Icon, Menu } from "metabase/ui";
+import * as Urls from "metabase/urls";
 import {
   useDeleteDataAppMutation,
   useSetDataAppEnabledMutation,
@@ -69,6 +71,17 @@ export const DataAppActionsMenu = ({ app, canRemove = false }: Props) => {
           >
             {t`View resources`}
           </Menu.Item>
+
+          {PLUGIN_DEPENDENCIES.isEnabled && (
+            <Menu.Item
+              component={Link}
+              to={Urls.dependencyGraph({
+                entry: { id: app.id, type: "data-app" },
+              })}
+            >
+              {t`View dependencies`}
+            </Menu.Item>
+          )}
 
           <Menu.Item
             component={Link}

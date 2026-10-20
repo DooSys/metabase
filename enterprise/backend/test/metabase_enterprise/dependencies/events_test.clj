@@ -4,6 +4,7 @@
    [metabase-enterprise.dependencies.findings :as deps.findings]
    [metabase-enterprise.dependencies.hooks :as deps.hooks]
    [metabase-enterprise.dependencies.models.analysis-finding :as models.analysis-finding]
+   [metabase-enterprise.dependencies.models.dependency :as models.dependency]
    [metabase-enterprise.dependencies.models.dependency-status :as deps.dependency-status]
    [metabase-enterprise.dependencies.task.entity-check :as task.entity-check]
    [metabase-enterprise.dependencies.test-util :as deps.test]
@@ -1105,3 +1106,60 @@
              (testing "reloading it unchanged marks nothing"
                (load! [exported])
                (is (processed card-id))))))))))
+
+(defn- data-app-deps
+  "The entities the data app with `app-id` depends on, as `[entity-type entity-id]` pairs."
+  [app-id]
+  (t2/select-fn-set (juxt :to_entity_type :to_entity_id)
+                    :model/Dependency :from_entity_type :data-app :from_entity_id app-id))
+
+(deftest data-app-depends-on-its-resource-collection-test
+  (run-with-dependencies-setup!
+   (fn [mp]
+     (let [venues-query (lib/query mp (lib.metadata/table mp (mt/id :venues)))]
+       (mt/with-temp [:model/DataApp {app-id :id collection-id :resource_collection_id}
+                      {:name "birds" :display_name "Birds" :bundle_path "birds.js"}
+                      :model/Collection {other-collection-id :id} {}
+                      :model/Card {card-id :id} {:dataset_query venues-query :collection_id collection-id}
+                      :model/Action {action-id :id} {:type :query :name "Delete venue" :collection_id collection-id}
+                      :model/QueryAction _ {:action_id     action-id
+                                            :database_id   (mt/id)
+                                            :dataset_query (lib/native-query mp "DELETE FROM venues WHERE id = 1")}]
+         (testing "an app depends on the cards and actions in its resource collection"
+           (assert-pending :data-app app-id)
+           (deps.test/synchronously-run-backfill!)
+           (is (= #{[:card card-id] [:action action-id]} (data-app-deps app-id))))
+         (mt/with-temp [:model/Card {added-id :id} {:dataset_query venues-query :collection_id collection-id}]
+           (testing "a card added to the collection becomes a dependency"
+             (assert-stale :data-app app-id)
+             (deps.test/synchronously-run-backfill!)
+             (is (= #{[:card card-id] [:card added-id] [:action action-id]} (data-app-deps app-id))))
+           (testing "a card moved out of the collection stops being one"
+             (t2/update! :model/Card added-id {:collection_id other-collection-id})
+             (assert-stale :data-app app-id)
+             (deps.test/synchronously-run-backfill!)
+             (is (= #{[:card card-id] [:action action-id]} (data-app-deps app-id)))))
+         (testing "a deleted action stops being one"
+           (t2/delete! :model/Action action-id)
+           (assert-stale :data-app app-id)
+           (deps.test/synchronously-run-backfill!)
+           (is (= #{[:card card-id]} (data-app-deps app-id))))
+         (testing "the app is an MBQL dependent of its card"
+           (is (= {:data-app #{app-id}}
+                  (models.dependency/transitive-mbql-dependents {:card [{:id card-id}]}))))
+         (testing "deleting the app removes its dependencies and status"
+           (t2/delete! :model/DataApp app-id)
+           (deps.test/synchronously-run-backfill!)
+           (is (empty? (data-app-deps app-id)))
+           (is (not (t2/exists? :model/DependencyStatus :entity_type :data-app :entity_id app-id)))))))))
+
+(deftest data-app-dependency-calculation-skips-the-bundle-test
+  (run-with-dependencies-setup!
+   (fn [_mp]
+     (mt/with-temp [:model/DataApp {app-id :id} {:name         "birds"
+                                                 :display_name "Birds"
+                                                 :bundle_path  "birds.js"
+                                                 :bundle       (byte-array [1 2 3])}]
+       (let [instances (deps.dependency-status/instances-for-dependency-calculation :data-app 50)]
+         (is (contains? (into #{} (map :id) instances) app-id))
+         (is (not-any? #(contains? % :bundle) instances)))))))

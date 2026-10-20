@@ -90,18 +90,30 @@
 (defmethod before-update* :default [_model _instance] nil)
 (defmethod before-delete* :default [_model _instance] nil)
 
-(doseq [model [:model/Action :model/Card :model/Dashboard :model/Document :model/Measure :model/NativeQuerySnippet
-               :model/Sandbox :model/Segment :model/Transform]]
+(defn- mark-owning-data-apps-changed!
+  "Mark for recalculation the data apps whose resource collection is among `collection-ids`, when the `model` rows
+  there are ones an app depends on."
+  [model collection-ids]
+  (when (#{:model/Action :model/Card} model)
+    (when-let [collection-ids (not-empty (into [] (comp (remove nil?) (distinct)) collection-ids))]
+      (doseq [app-id (dependencies.db/resource-collection-data-app-ids collection-ids)]
+        (mark-changed! :data-app app-id)))))
+
+(doseq [model [:model/Action :model/Card :model/Dashboard :model/DataApp :model/Document :model/Measure
+               :model/NativeQuerySnippet :model/Sandbox :model/Segment :model/Transform]]
   (defmethod before-insert* model
-    [_model _instance]
+    [model instance]
+    (mark-owning-data-apps-changed! model [(:collection_id instance)])
     (trigger-jobs!))
   (defmethod before-delete* model
     [model instance]
+    (mark-owning-data-apps-changed! model [(:collection_id instance)])
     (mark-changed! (deps.dependency-types/model->dependency-type model) (:id instance))))
 
 (doseq [[model columns] {:model/Action             #{:model_id :type}
                          :model/Card               #{:type :dataset_query :dimension_mappings :parameters}
                          :model/Dashboard          #{:parameters}
+                         :model/DataApp            #{:resource_collection_id}
                          :model/Document           #{:content_type :document}
                          :model/Measure            #{:definition :table_id}
                          :model/NativeQuerySnippet #{:content :template_tags}
@@ -110,6 +122,8 @@
                          :model/Transform          #{:source :target}}]
   (defmethod before-update* model
     [model instance]
+    (when (changed? instance #{:collection_id})
+      (mark-owning-data-apps-changed! model [(:collection_id (t2/original instance)) (:collection_id instance)]))
     (mark-entity-changed! model instance columns)))
 
 (defmethod before-insert* :model/QueryAction

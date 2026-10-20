@@ -5,6 +5,7 @@
    [metabase-enterprise.dependencies.dependency-types :as deps.dependency-types]
    [metabase-enterprise.dependencies.models.dependency :as models.dependency]
    [metabase.models.interface :as mi]
+   [metabase.util :as u]
    [methodical.core :as methodical]
    [toucan2.core :as t2]))
 
@@ -47,6 +48,20 @@
     (mapv (fn [{:keys [id] :as action}]
             (cond-> action
               (contains? queries id) (assoc :dataset_query (queries id))))
+          instances)))
+
+(defmethod hydrate-for-deps :data-app [_ instances]
+  (let [collection-ids    (into [] (keep :resource_collection_id) instances)
+        ids-by-collection (fn [rows]
+                            (u/group-by :collection_id :id conj #{} rows))
+        card-ids          (when (seq collection-ids)
+                            (ids-by-collection (dependencies.db/cards-in-collections collection-ids)))
+        action-ids        (when (seq collection-ids)
+                            (ids-by-collection (dependencies.db/actions-in-collections collection-ids)))]
+    (mapv (fn [{collection-id :resource_collection_id :as app}]
+            (assoc app
+                   :card_ids   (get card-ids collection-id #{})
+                   :action_ids (get action-ids collection-id #{})))
           instances)))
 
 (defn instances-for-dependency-calculation
