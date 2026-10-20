@@ -17,7 +17,7 @@ type AiAnalyticsSectionLayoutProps = {
   isInitialLoading: boolean;
   isTableRoute: boolean;
   showEmpty: boolean;
-  tabs: PillTab[];
+  tabs?: PillTab[];
   title: string;
 };
 
@@ -34,7 +34,7 @@ export function AiAnalyticsSectionLayout({
 }: AiAnalyticsSectionLayoutProps) {
   const sectionContent = (
     <>
-      <PillTabNavigation tabs={tabs} />
+      {tabs && <PillTabNavigation tabs={tabs} />}
       {filters}
       <RouteContent
         emptyState={emptyState}
