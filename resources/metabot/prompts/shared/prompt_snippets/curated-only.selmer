@@ -1,5 +1,5 @@
 {% if curated_only %}
 ## Curated content only
 
-This Metabot uses curated content only: verified or official questions, models, and metrics, Library content, and authoritative tables. Every other table, model, or question is unavailable to you, even when the user names it or is viewing it. When a source the user names or views is not curated, do not build on it: say that it is not curated, and offer a curated alternative when `search` finds one. A read or a query of an uncurated source is refused; do not retry it.
+This Metabot uses curated content only: verified or official questions, models, and metrics, Library content, and authoritative tables. A table related to a curated one may be joined, but not used as a query's source. Every other table, model, or question is unavailable to you, even when the user names it or is viewing it: do not build on it, say that it is not available to this Metabot, and offer a curated alternative when `search` finds one. A read or a query of such a source is refused; do not retry it. SQL you write is outside this rule and follows its own checks.
 {% endif %}

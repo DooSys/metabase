@@ -651,25 +651,30 @@
                         :model/Segment (metabot.db/segment-table-id id))]
     (check-table-resource-database table-id)))
 
-(defn- usable-metrics
-  "The `metrics` embedded in a table's or card's details that a `metric/{id}` read would serve (see
-   [[curation/usable-metric-ids]])."
-  [metrics]
-  (let [usable (curation/usable-metric-ids (map :id metrics))]
-    (filterv (fn [{:keys [id]}] (contains? usable id)) metrics)))
+(defn- curated-or-shown-related-tables
+  "The related `tables` of a table's details a curated-only Metabot may see: those listed with their columns, which
+   it may join as shown, and those it could read on its own, since a `table/{id}` read of any other is denied."
+  [tables]
+  (let [curated (curation/curated-ids (map (fn [{:keys [id]}] ["table" id]) tables))]
+    (filterv (fn [{:keys [id fields]}] (or (seq fields) (contains? curated ["table" id]))) tables)))
+
+(defn trim-details-for-curated-only
+  "A table's or card's `details` trimmed to what a curated-only Metabot may use: the embedded metrics `metric/{id}`
+   would deny are dropped, a card's exported definition is withheld (see [[curation/without-definition]]), and
+   related tables are kept only as [[curated-or-shown-related-tables]] keeps them. Exported for the viewing
+   context, which renders the same details."
+  [details]
+  (cond-> (curation/without-definition details)
+    (seq (:metrics details))                       (update :metrics curation/usable-metrics)
+    (seq (:related_tables details))                (update :related_tables curated-or-shown-related-tables)
+    (seq (:related_tables_without_fields details)) (update :related_tables_without_fields
+                                                           curated-or-shown-related-tables)))
 
 (defn- curated-only-details
-  "Under [[shared/curated-only?]], trim a table's or card's details `result` to what this Metabot may use: the
-   embedded metrics `metric/{id}` would deny are dropped; a card's exported definition (`:query_json`) is
-   withheld, since it names the tables the definition reads rather than the result columns the card covers; and
-   the related tables listed without their columns are dropped, since the `table/{id}` read they invite is denied
-   for an uncurated table, while the ones listed with columns are joinable as shown."
+  "Under [[shared/curated-only?]], `result` with its details trimmed by [[trim-details-for-curated-only]]."
   [result]
   (cond-> result
-    (and (shared/curated-only?) (seq (get-in result [:structured-output :metrics])))
-    (update-in [:structured-output :metrics] usable-metrics)
-    (shared/curated-only?)
-    (update :structured-output dissoc :query_json :related_tables_without_fields :related_tables_total)))
+    (shared/curated-only?) (update :structured-output trim-details-for-curated-only)))
 
 (defn- table-details
   "Shared `entity-details/get-table-details` call for both /table/{id} and /table/{id}/fields.
@@ -1041,8 +1046,7 @@
 
 (defn- curation-subject
   "What a single-entity URI must be curated as under [[shared/curated-only?]]: a `[model id]` pair — `\"table\"`,
-   `\"card\"`, `\"dashboard\"`, `\"metric\"` (judged by [[curation/curated-metric?]]), `:measure` and `:segment`
-   (judged by [[curation/measure-or-segment-curated?]]: their Table, and the Tables their definition reads), or
+   `\"card\"`, `\"dashboard\"`, `\"metric\"`, `:measure`, `:segment` (see [[curation/subject-curated?]]), or
    `\"transform\"` (never curated) — or nil when the URI isn't gated: navigation, collections, documents,
    conversation state, and `table/{id}/derived` (whose listing is filtered instead), plus measures and segments
    that don't exist (left to their handler's 404)."

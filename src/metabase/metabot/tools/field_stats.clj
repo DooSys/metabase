@@ -81,18 +81,18 @@
         (api/check-403 (contains? allowed field-id))))))
 
 (defn- check-curated-field-owner!
-  "Under [[shared/curated-only?]], require that the Field behind `col`, a result column of the card `card-id`, belongs
-  to a Table the card's definition reads or one FK hop from it. A card's result metadata can map a column to any
-  Field, so without this a curated model could serve, and fingerprint, a column of a table it never reads; a
-  native definition names no tables, so none of a SQL card's columns pass (see
-  [[metabot.tools.u/card-definition-table-ids]])."
+  "Under [[shared/curated-only?]], throw [[recoverable.common/not-curated!]] unless the Field behind `col`, a result
+  column of the card `card-id`, belongs to a Table in [[metabot.tools.u/card-definition-table-ids]] of the card;
+  for a SQL card, whose definition names no Tables, [[recoverable.common/native-card-column!]] says why."
   [card-id col]
   (when (shared/curated-only?)
     (let [field-id (:id col)
           owner    (when (pos-int? field-id)
                      (get (metabot.perms/field-id->table-id #{field-id}) field-id))]
       (when (and owner (not (contains? (metabot.tools.u/card-definition-table-ids card-id) owner)))
-        (recoverable.common/not-curated! {:label (str "field " field-id)})))))
+        (if (metabot.tools.u/native-card? card-id)
+          (recoverable.common/native-card-column! {:label (str "field " field-id)})
+          (recoverable.common/not-curated! {:label (str "field " field-id)}))))))
 
 (defn- agent-output-or-rethrow
   "The agent output for `ex`, except that a declared recoverable error is rethrown so its recovery steps reach the

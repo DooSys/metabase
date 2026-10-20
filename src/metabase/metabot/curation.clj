@@ -9,6 +9,7 @@
   index's precomputed `curated` column."
   (:require
    [clojure.set :as set]
+   [clojure.walk :as walk]
    [metabase.audit-app.core :as audit-app]
    [metabase.collections.curation :as curation]
    [metabase.collections.models.collection :as collection]
@@ -19,6 +20,7 @@
    [metabase.metabot.tools.recoverable.common :as recoverable.common]
    [metabase.models.interface :as mi]
    [metabase.premium-features.core :as premium-features]
+   [metabase.query-permissions.core :as query-perms]
    [metabase.util :as u]
    [metabase.util.log :as log]))
 
@@ -27,11 +29,11 @@
 ;;; ----- Session -----
 
 (def ^:private curation-exempt-profiles
-  "Profiles whose tools aren't restricted by `use_verified_content`. The nlq profile discovers data through the
-  Library index, which carries its own scope; `nlq-fallback` serves the same profile with general search. The SQL
-  profiles write SQL over the warehouse's own tables, and SQL is outside this rule, so their reads are not gated
-  either."
-  #{:nlq :nlq-fallback :sql :internal-sql})
+  "Profiles whose tools aren't restricted by `use_verified_content`; their `search` keeps the curated filter. The nlq
+  profile discovers data through the Library index, which carries its own scope; `nlq-fallback` serves the same
+  profile with general search. The `sql` profile has only the SQL tools and the reads that feed them, and SQL is
+  outside this rule."
+  #{:nlq :nlq-fallback :sql})
 
 (defn curated-only?
   "Whether a Metabot tool running for the Metabot row `metabot` under `profile-id` may only reach curated content:
@@ -48,9 +50,7 @@
   #{"card" "dataset" "metric"})
 
 (defn- feature-gates
-  "Which curation signals the licence currently grants. The signals are read live from the source tables, where a
-  review, an official collection, or a Library stays after a downgrade, so each one counts only while its feature
-  is active, as in [[metabot.db/metabot-metrics-and-models]] and the in-place search filter."
+  "Which curation signals the licence currently grants: each one counts only while its feature is active."
   []
   {:verified? (premium-features/has-feature? :content-verification)
    :official? (premium-features/has-feature? :official-collections)
@@ -185,10 +185,10 @@
 (defn- load-metric-definitions!
   "Load into `definitions` (the atom of metric id -> definition query, or nil for a metric whose Card is missing,
   archived, not a metric, or has no usable definition, that a [[metric-context]] shares across one judgement) the
-  definitions of `metric-ids` and of the metrics they reference, transitively, `levels` levels deep. Each Card is
-  loaded once per judgement: a nested call finds what the top-level walk already loaded, and the walk stops where
-  [[max-metric-nesting]] would fail the chain anyway."
+  definitions of `metric-ids` and of the metrics they reference, transitively, `levels` levels deep."
   [mp definitions metric-ids levels]
+  ;; each Card is loaded once per judgement: a nested call finds what the top-level walk already loaded, and the
+  ;; walk stops where `max-metric-nesting` would fail the chain anyway
   (loop [todo   (set metric-ids)
          levels levels]
     (when (and (seq todo) (pos? levels))
@@ -289,8 +289,9 @@
                                                           :table)]
                       (cond-> (set definition-tables)
                         table-id (conj table-id))))
+        ;; a by-id lookup returns trashed rows too; one in the trash is judged like one that is missing
         found     (fn [kind metadata-type ids]
-                    (let [by-id (u/index-by :id (lib.metadata/bulk-metadata mp metadata-type ids))]
+                    (let [by-id (u/index-by :id (remove :archived (lib.metadata/bulk-metadata mp metadata-type ids)))]
                       (into {} (map (fn [id] [[kind id] (some-> (get by-id id) tables-of)])) ids)))]
     (merge (found :measure :metadata/measure measure-ids)
            (found :segment :metadata/segment segment-ids))))
@@ -336,9 +337,8 @@
   "The `[kind id]` pairs (`\"table\"`, `\"card\"`, `:measure`, `:segment`) among `refs` that a curated-only Metabot
   may not read, or empty when a query over them may run. `refs` names what a query reads, resolved against `mp`:
   `:source-table` or `:source-card`, the query's own source, and the sets `:table`, `:card`, `:metric`,
-  `:measure`, and `:segment` of everything it references. One rule for a resolved query
-  ([[uncurated-query-sources]]) and for the ids `construct_notebook_query` reads off a portable query before repair,
-  so the two gates can't disagree."
+  `:measure`, and `:segment` of everything it references. The rule [[uncurated-query-sources]] applies to a
+  resolved query, for a caller that has only ids."
   [mp refs]
   (uncurated-sources* mp refs (metric-context)))
 
@@ -385,6 +385,18 @@
           (filter (fn [id] (or (contains? curated ["card" id]) (curated-metric? id))))
           ids)))
 
+(defn usable-metrics
+  "The metric `rows` (maps with `:id`) a curated-only Metabot may use (see [[usable-metric-ids]])."
+  [rows]
+  (let [usable (usable-metric-ids (map :id rows))]
+    (filterv #(contains? usable (:id %)) rows)))
+
+(defn without-definition
+  "A card's `details` without its exported definition (`:query_json`), which names the tables the definition reads
+  rather than the result columns the card covers: what a curated-only Metabot sees of a card."
+  [details]
+  (dissoc details :query_json))
+
 (defn- measure-or-segment-curated?
   "Whether a curated-only Metabot may read the measure or segment `id` (`kind` is `:measure` or `:segment`): its
   Table is curated, and every Table its definition reads is curated or one FK hop from its Table, the way
@@ -426,9 +438,9 @@
     (recoverable.common/not-curated! {:label label})))
 
 (defn check-curated-readable-subject!
-  "[[check-curated-subject!]] for a tool that takes a bare id and has no pre-checks of its own: the judgement runs
-  only when the entity exists and the current user can read it, so a missing or unreadable id gets the handler's
-  own answer rather than a curation verdict, and an unreadable entity doesn't reveal whether it's curated."
+  "[[check-curated-subject!]], run only when the entity exists and the current user can read it, so a missing or
+  unreadable id gets the caller's own answer rather than a curation verdict, and an unreadable entity doesn't
+  reveal whether it's curated."
   [label [model id :as subject]]
   (let [row (case model
               "table"           (metabot.db/table id)
@@ -438,27 +450,63 @@
     (when (some-> row mi/can-read?)
       (check-curated-subject! label subject))))
 
-(defn- query-sources-reachable?
-  "Whether every Table `query` names exists and the current user can query it, and every Card exists and they can
-  read it. A query that fails this is left to the query processor's own answer, so the curation of an entity the
-  user can't reach, or of an id that names nothing, isn't revealed."
+(defn- query-runnable?
+  "Whether everything `query` names exists and the current user may run it, as the query processor judges it. A
+  query that fails this is left to the query processor's own answer, so the curation of an entity the user can't
+  reach, or of an id that names nothing, isn't revealed. The existence checks come first, so an id that names
+  nothing doesn't reach the permission walk, which logs a failure to work out a query's permissions."
   [query]
-  (let [{:keys [table card]} (lib/all-referenced-entity-ids [query])]
-    (and (every? #(some-> (metabot.db/table %) mi/can-query?) table)
-         (every? #(some-> (metabot.db/card %) mi/can-read?) card))))
+  (let [{:keys [table card measure segment]} (lib/all-referenced-entity-ids [query])]
+    (and (every? #(some? (metabot.db/table %)) table)
+         (every? #(some? (metabot.db/card %)) card)
+         (every? #(some? (metabot.db/live-measure-table-id %)) measure)
+         (every? #(some? (metabot.db/live-segment-table-id %)) segment)
+         (query-perms/can-run-query? query))))
+
+(defn- without-native-refs
+  "`query` with the template tags of its native stages removed, in joins too: what a native stage reads is SQL's
+  business, outside this rule."
+  [query]
+  (update query :stages
+          (fn [stages]
+            (walk/postwalk (fn [x]
+                             (if (and (map? x) (= :mbql.stage/native (:lib/type x)))
+                               (dissoc x :template-tags)
+                               x))
+                           stages))))
 
 (defn check-curated-query!
   "Reject `query` — a query the conversation holds, as a lib query or a query map with `:database` — unless
   everything it reads is curated or covered (see [[uncurated-query-sources]]), naming it by `label`. A native stage
   names no tables to judge it by, so a query holding one is rejected, unless the caller passes `:native :allow`
-  because SQL reaches the model through its own gates there. Callers decide whether the session is curated-only."
+  because SQL is outside this rule there: the structured stages are then judged and the native ones are not. A
+  query the user can't run, or that names what doesn't exist, is left to the query processor's answer, unless the
+  caller passes `:unreachable :deny` because no query processor runs after the check. A query that can't be built
+  is rejected. Callers decide whether the session is curated-only."
   ([label query]
    (check-curated-query! label query nil))
-  ([label query {:keys [native] :or {native :deny}}]
-   (let [query (cond-> query
-                 (not (:lib/metadata query))
-                 (->> (lib/query (lib-be/application-database-metadata-provider (:database query)))))]
+  ([label query {:keys [native unreachable] :or {native :deny unreachable :pass}}]
+   (let [query (cond
+                 (:lib/metadata query)
+                 query
+
+                 (pos-int? (:database query))
+                 (lib/query (lib-be/application-database-metadata-provider (:database query)) query)
+
+                 :else
+                 (recoverable.common/not-curated! {:label label}))]
      (when (or (and (= native :deny) (lib/any-native-stage? query))
-               (and (query-sources-reachable? query)
-                    (seq (uncurated-query-sources query))))
+               (if (query-runnable? query)
+                 (seq (uncurated-query-sources (cond-> query (= native :allow) without-native-refs)))
+                 (= unreachable :deny)))
        (recoverable.common/not-curated! {:label label})))))
+
+(defn query-curated?
+  "Whether a curated-only Metabot may read everything `query` (a lib query or a query map with `:database`) reads,
+  for a query the user has on screen: false for a query that can't be judged or built. Native stages are SQL's
+  business, outside this rule."
+  [query]
+  (try
+    (nil? (check-curated-query! "query" query {:native :allow :unreachable :deny}))
+    (catch Exception _
+      false)))

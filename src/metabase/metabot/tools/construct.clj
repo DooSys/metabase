@@ -577,9 +577,10 @@
 (defn- check-curated-portable-sources!
   "Under [[shared/curated-only?]], before repair reads the query: reject it when its first-stage source, a Card it
   reads, or a table it references is neither curated nor reachable from curated content it references. This is
-  the coarse gate: it reads only what the portable query names and judges those ids by the one rule
-  ([[curation/uncurated-sources]]); [[check-curated-query-sources!]] applies the same rule to the resolved query.
-  `table-ids` are the tables [[check-source-table-query-permissions!]] resolved."
+  the coarse gate: it judges the ids the portable query names by the rule of [[curation/uncurated-sources]], the
+  tables every field reference names included and measures and segments excluded; [[check-curated-query-sources!]]
+  judges the resolved query by the same rule. `table-ids` are the tables [[check-source-table-query-permissions!]]
+  resolved."
   [metadata-provider parsed-query table-ids]
   (when (shared/curated-only?)
     (let [cards        (into [] (keep readable-card-by-ref) (source-card-refs parsed-query))

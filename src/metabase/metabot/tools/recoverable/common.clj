@@ -47,8 +47,18 @@
              [:label :string]]}
   [{:keys [label]}]
   {:message  (str "`" label "` is not available: this Metabot only uses curated content (verified, official, or "
-                  "Library content, and authoritative tables).")
+                  "Library content, and authoritative tables). Do not retry it, and do not retry another entity "
+                  "this check refused; tell the user it is not available to this Metabot.")
    :recovery [{:uses #{"search"}
-               :text (str "Call `search` to find curated tables, models, or metrics and use one of those instead. "
-                          "Do not retry an entity `search` already returned and this check refused; tell the user "
-                          "it is not curated.")}]})
+               :text "Call `search` to find curated tables, models, or metrics and use one of those instead."}]})
+
+(defrecoverable native-card-column!
+  "A column of a SQL question has no field values for a curated-only Metabot: a native definition names no tables
+  to judge the column's owner by."
+  {:payload [:map {:closed true}
+             [:label :string]]}
+  [{:keys [label]}]
+  {:message  (str "`" label "` has no field values here: it is a column of a SQL question, and this Metabot only "
+                  "reads field values through content whose definition names the tables it reads. Use the "
+                  "question's result columns as they are.")
+   :recovery []})

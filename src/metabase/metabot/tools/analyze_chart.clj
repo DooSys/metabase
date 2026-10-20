@@ -5,12 +5,16 @@
   series data in chart_configs, which is seeded into agent memory during
   initialization. This avoids re-executing queries."
   (:require
+   [clojure.string :as str]
    [metabase.interestingness.core :as interestingness]
    [metabase.metabot.curation :as curation]
+   [metabase.metabot.db :as metabot.db]
    [metabase.metabot.scope :as scope]
+   [metabase.metabot.tools.error :as tools.error]
    [metabase.metabot.tools.recoverable.common :as recoverable.common]
    [metabase.metabot.tools.shared :as shared]
    [metabase.metabot.tools.util :as metabot.tools.u]
+   [metabase.models.interface :as mi]
    [metabase.util.malli :as mu]
    [tech.v3.resource :as resource]))
 
@@ -51,6 +55,39 @@ Do not use headers (##). Do not list statistics. Do not analyze series separatel
   (some-> (get (shared/current-chart-configs-state) chart-config-id)
           stringify-series-keys))
 
+(defn- chart-owner
+  "The viewing-context item whose chart configs `chart-config-id` names: the ids are `{item-id}` for one config and
+  `{item-id}-{index}` for several (see `metabase.metabot.agent.core`)."
+  [chart-config-id]
+  (some (fn [{:keys [id] :as item}]
+          (when (and id (or (= chart-config-id (str id)) (str/starts-with? chart-config-id (str id "-"))))
+            item))
+        (get-in (shared/current-memory) [:context :user_is_viewing])))
+
+(defn- check-curated-chart!
+  "Under [[shared/curated-only?]], refuse the chart `chart-config` unless this Metabot may use what it shows, since
+  its series rows reach the model as a query's rows would. A chart of a saved question, model, or metric is judged
+  by that card, as `run_query` judges it; any other by the query that produced it, with no query processor behind
+  the check to answer for an unreachable one. A chart that carries neither can't be judged and is refused."
+  [chart-config-id chart-config]
+  (when (shared/curated-only?)
+    (let [label            (str "chart " chart-config-id)
+          {:keys [type id]} (chart-owner chart-config-id)
+          card-id          (when (contains? #{"question" "model" "metric"} (some-> type name))
+                             (if (string? id) (parse-long id) id))
+          card             (when (pos-int? card-id) (metabot.db/card card-id))]
+      (cond
+        card-id
+        (if (some-> card mi/can-read?)
+          (curation/check-curated-subject! label [(if (= :metric (:type card)) "metric" "card") card-id])
+          (recoverable.common/not-curated! {:label label}))
+
+        (:query chart-config)
+        (curation/check-curated-query! label (:query chart-config) {:native :allow :unreachable :deny})
+
+        :else
+        (recoverable.common/not-curated! {:label label})))))
+
 (defn- non-numeric-y-value?
   "True when `y-values` contains a non-nil value that is not a number.
   nil y-values are allowed; they are treated as missing data points downstream."
@@ -82,17 +119,10 @@ Do not use headers (##). Do not list statistics. Do not analyze series separatel
   [{:keys [chart_config_id deep]} :- [:map {:closed true}
                                       [:chart_config_id :string]
                                       [:deep {:optional true :default true} [:maybe :boolean]]]]
-  (let [chart-config (resolve-chart-config-from-memory chart_config_id)]
-    ;; The series rows reach the model as a query's rows would: a curated-only Metabot analyzes a chart only when
-    ;; `run_query` could run its query. SQL on screen is left to the SQL gates, as in `run_query`; a chart that
-    ;; carries no query can't be judged and is refused.
-    (when (and chart-config (shared/curated-only?))
-      (if-let [query (:query chart-config)]
-        (curation/check-curated-query! (str "chart " chart_config_id) query {:native :allow})
-        (recoverable.common/not-curated! {:label (str "chart " chart_config_id)}))))
   (try
     (if-let [chart-config (resolve-chart-config-from-memory chart_config_id)]
       (do
+        (check-curated-chart! chart_config_id chart-config)
         (validate-chart-config! chart-config)
         ;; Wrap TMD operations in resource context to ensure off-heap memory is released
         (resource/stack-resource-context
@@ -108,4 +138,7 @@ Do not use headers (##). Do not list statistics. Do not analyze series separatel
       {:output (str "Chart config not found: " chart_config_id
                     ". Available chart configs can be found in the viewing context.")})
     (catch Exception e
-      (metabot.tools.u/handle-agent-error e))))
+      ;; a declared recoverable error keeps its recovery steps by reaching the tool runtime as thrown
+      (if (tools.error/recoverable? e)
+        (throw e)
+        (metabot.tools.u/handle-agent-error e)))))

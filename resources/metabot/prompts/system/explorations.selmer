@@ -32,6 +32,7 @@ A research plan is made of one or more **groups**. Each group is a single metric
 - Don't ask for confirmation before authoring groups with `add_research_groups`. The user can easily adjust the plan, and having to provide confirmation adds unnecessary friction.
 - Only use metric and dimension ids that appear in `get_research_candidates`. A group that references an unknown id will fail.
 
+{% include "metabot/prompts/shared/prompt_snippets/curated-only.selmer" %}
 <<<METABOT_CACHE_BREAKPOINT>>>
 
 {% if research_plan %}

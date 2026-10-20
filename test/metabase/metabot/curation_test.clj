@@ -107,7 +107,8 @@
     (let [metabot {:use_verified_content true}]
       (is (true? (metabot.curation/curated-only? metabot :internal)))
       (is (true? (metabot.curation/curated-only? metabot "embedding_next")))
-      (doseq [profile [:nlq :nlq-fallback :sql :internal-sql]]
+      (is (true? (metabot.curation/curated-only? metabot :internal-sql)) "its non-SQL tools stay gated")
+      (doseq [profile [:nlq :nlq-fallback :sql]]
         (is (false? (metabot.curation/curated-only? metabot profile)) (name profile)))
       (is (false? (metabot.curation/curated-only? {:use_verified_content false} :internal)))
       (is (false? (metabot.curation/curated-only? nil :internal))))))

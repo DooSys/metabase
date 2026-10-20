@@ -199,11 +199,16 @@
     (let [mp (lib-be/application-database-metadata-provider (:database_id card))]
       (lib/query mp (lib.metadata/card mp card-id)))))
 
+(defn native-card?
+  "Whether the card with ID `card-id` exists and its definition holds a native stage."
+  [card-id]
+  (boolean (some-> (get-card card-id) :dataset_query not-empty lib/any-native-stage?)))
+
 (defn card-definition-table-ids
   "The ids of the Tables the definition of the card with ID `card-id` reads, plus the Tables one FK hop away from
   them, following source Cards to their own definitions (ten levels at most), or nil when the card is missing or
   its query can't be built. A native definition names no Tables, and its result metadata can map a column to any
-  Field, so it contributes none: a field read on a SQL card is judged on the tables of the cards it reads, if any."
+  Field, so it contributes none and the walk doesn't follow it."
   [card-id]
   (when-let [card (get-card card-id)]
     (let [mp (lib-be/application-database-metadata-provider (:database_id card))]

@@ -91,7 +91,7 @@
                                               :with-default-temporal-breakout? false
                                               :with-measures? true
                                               :with-segments? true})
-                                      curated-only? (update :structured-output dissoc :query_json)))
+                                      curated-only? (update :structured-output curation/without-definition)))
                                   %)
                                 model-ids)
             metric-results (mapv #(safe-fetch
@@ -169,8 +169,8 @@
      (update :structured-output
              (fn [so]
                (-> so
-                   (update :metrics (fn [rows] (mapv #(dissoc % :query_json) rows)))
-                   (update :models (fn [rows] (mapv #(dissoc % :query_json) rows)))))))
+                   (update :metrics #(mapv curation/without-definition %))
+                   (update :models #(mapv curation/without-definition %))))))
    format-answer-sources-output))
 
 (def ^:private list-available-fields-schema

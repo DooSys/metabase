@@ -76,10 +76,8 @@
   "Under [[shared/curated-only?]], keep only the metrics of the research `index` this Metabot may use (see
    [[curation/usable-metric-ids]]). The truncation stamp is left as the catalog computed it."
   [index]
-  (if (shared/curated-only?)
-    (let [usable (curation/usable-metric-ids (map :id (:metrics index)))]
-      (update index :metrics (fn [rows] (filterv #(contains? usable (:id %)) rows))))
-    index))
+  (cond-> index
+    (shared/curated-only?) (update :metrics curation/usable-metrics)))
 
 (defn- check-curated-metrics!
   "Under [[shared/curated-only?]], reject the first of `metric-ids` this Metabot may not use. A missing or unreadable
@@ -95,9 +93,9 @@
   so the result is filtered the way [[curated-only-index]] filters the index."
   [candidates]
   (if (shared/curated-only?)
-    (let [usable (curation/usable-metric-ids (map :id (:metrics candidates)))]
+    (let [usable (into #{} (map :id) (curation/usable-metrics (:metrics candidates)))]
       (-> candidates
-          (update :metrics (fn [rows] (filterv #(contains? usable (:id %)) rows)))
+          (update :metrics curation/usable-metrics)
           (update :dimension_groups
                   (fn [groups]
                     (into []

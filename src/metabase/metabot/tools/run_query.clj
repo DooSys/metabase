@@ -399,8 +399,8 @@
 ;; can go then. See BOT-2318.
 
 (defn- runnable-query
-  "`{:query :inline-sql? :checked-sql :sql-card?}`: the serialized MBQL 5 form of the query stored under `query-id`,
-   which state may hold as MBQL 4 (the user's viewing context) or MBQL 5, and for a SQL query the SQL it compiled to.
+  "`{:query :checked-sql :sql-card?}`: the serialized MBQL 5 form of the query stored under `query-id`, which state
+   may hold as MBQL 4 (the user's viewing context) or MBQL 5, and for a SQL query the SQL it compiled to.
    A SQL query passes [[check-sql-runnable!]] before anything else touches it, and [[check-read-only-select!]] once
    it is serialized.
    A notebook query that reads a SQL question Metabot saved ([[metabot-sql-card?]]) is a SQL query here too, marked
@@ -437,7 +437,6 @@
         (when sql-card?
           (check-sql-runnable! query-id (:database normalized) true allow-non-sql?))
         {:query       serialized
-         :inline-sql? inline-sql?
          :sql-card?   sql-card?
          :checked-sql (when (or inline-sql? sql-card?)
                         (check-read-only-select! query-id serialized sql-card? allow-non-sql?))}))))
@@ -624,10 +623,10 @@
                              (recovery-hint allow-non-sql?)))))
       ;; A query the conversation holds came from construct_notebook_query, which judged it, or from the user's
       ;; viewing context, which nothing judged: the rows go to the model either way. A saved question was judged
-      ;; in [[saved-question]]. SQL the query holds itself is left to the SQL gates above; a notebook query over a
-      ;; SQL question is judged like any other.
-      (when (and (shared/curated-only?) (nil? saved-card) (not (:inline-sql? runnable)))
-        (curation/check-curated-query! (str "query " query_id) (:query runnable)))
+      ;; in [[saved-question]]. SQL the query holds itself is outside the rule and passed the SQL gates above; its
+      ;; structured stages, and a notebook query over a SQL question, are judged like any other.
+      (when (and (shared/curated-only?) (nil? saved-card))
+        (curation/check-curated-query! (str "query " query_id) (:query runnable) {:native :allow}))
       (let [page                                 (execute-page! query_id runnable (or row_limit default-row-limit)
                                                                 allow-non-sql?)
             {:keys [output returned truncated?]} (result-output query_id page saved-card)]
