@@ -93,9 +93,10 @@
   so the result is filtered the way [[curated-only-index]] filters the index."
   [candidates]
   (if (shared/curated-only?)
-    (let [usable (into #{} (map :id) (curation/usable-metrics (:metrics candidates)))]
+    (let [metrics (curation/usable-metrics (:metrics candidates))
+          usable  (into #{} (map :id) metrics)]
       (-> candidates
-          (update :metrics curation/usable-metrics)
+          (assoc :metrics metrics)
           (update :dimension_groups
                   (fn [groups]
                     (into []

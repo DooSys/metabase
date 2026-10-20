@@ -199,35 +199,30 @@
     (let [mp (lib-be/application-database-metadata-provider (:database_id card))]
       (lib/query mp (lib.metadata/card mp card-id)))))
 
-(defn native-card?
-  "Whether the card with ID `card-id` exists and its definition holds a native stage."
-  [card-id]
-  (boolean (some-> (get-card card-id) :dataset_query not-empty lib/any-native-stage?)))
-
-(defn card-definition-table-ids
-  "The ids of the Tables the definition of the card with ID `card-id` reads, plus the Tables one FK hop away from
-  them, following source Cards to their own definitions (ten levels at most), or nil when the card is missing or
-  its query can't be built. A native definition names no Tables, and its result metadata can map a column to any
-  Field, so it contributes none and the walk doesn't follow it."
+(defn card-definition-reach
+  "`{:native? :table-ids}` for the definition of the card with ID `card-id`: whether it, or a source Card it reads
+  at any depth, holds a native stage, and the ids of the Tables it reads plus the Tables one FK hop away from them,
+  following source Cards to their own definitions (ten levels at most). Nil when the card is missing or its query
+  can't be built. A native definition names no Tables, and its result metadata can map a column to any Field, so
+  it contributes none and the walk doesn't follow it."
   [card-id]
   (when-let [card (get-card card-id)]
     (let [mp (lib-be/application-database-metadata-provider (:database_id card))]
       (try
-        (loop [todo #{card-id} seen #{} tables #{} depth 0]
+        (loop [todo #{card-id} seen #{} tables #{} native? false depth 0]
           (if (or (empty? todo) (= depth 10))
-            tables
-            (let [queries (into []
-                                (keep (fn [{:keys [dataset-query]}]
-                                        (let [query (some->> dataset-query (lib/query mp))]
-                                          (when (and query (not (lib/any-native-stage? query)))
-                                            query))))
+            {:native? native? :table-ids tables}
+            (let [built   (into []
+                                (keep (fn [{:keys [dataset-query]}] (some->> dataset-query (lib/query mp))))
                                 (lib.metadata/bulk-metadata mp :metadata/card todo))
+                  queries (into [] (remove lib/any-native-stage?) built)
                   refs    (if (seq queries)
                             (lib/all-referenced-entity-ids queries {:include-implicitly-joinable? true})
                             {})]
               (recur (into #{} (remove (into seen todo)) (:card refs))
                      (into seen todo)
                      (into tables (:table refs))
+                     (or native? (not= (count built) (count queries)))
                      (inc depth)))))
         (catch Exception e
           (log/debug e "Can't walk the card's definition; treating its tables as unknown")

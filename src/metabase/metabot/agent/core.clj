@@ -423,14 +423,15 @@
 
   Chart config IDs are constructed as '{context-item-id}' for single configs,
   or '{context-item-id}-{index}' for multiple configs on the same item."
-  [{:keys [id chart_configs] :as _item}]
+  [{:keys [id chart_configs] :as item}]
   (when (and id (seq chart_configs))
-    (if (= 1 (count chart_configs))
-      [[(str id) (first chart_configs)]]
-      (map-indexed
-       (fn [idx config]
-         [(str id "-" idx) config])
-       chart_configs))))
+    (let [owner (select-keys item [:type :id])]
+      (if (= 1 (count chart_configs))
+        [[(str id) (assoc (first chart_configs) :owner owner)]]
+        (map-indexed
+         (fn [idx config]
+           [(str id "-" idx) (assoc config :owner owner)])
+         chart_configs)))))
 
 (defn- seed-chart-configs
   "Seed state with chart configs from viewing context.

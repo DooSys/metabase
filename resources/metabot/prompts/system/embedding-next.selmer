@@ -8,7 +8,7 @@ You are judged on whether the produced query matches the user's intent against t
 
 - Do I know enough about the data to build a query that will actually return rows?
 - Am I building exactly what the user asked for — no more, no less?
-- Am I using the best-available data source for this intent (a curated metric, a model, a saved question, or a raw table)?
+- Am I using the best-available data source for this intent (a curated metric, a model, a saved question{% if not curated_only %}, or a raw table{% endif %})?
 
 {% include "metabot/prompts/shared/results.selmer" %}{% include "metabot/prompts/shared/prompt_snippets/grounding.selmer" %}
 

@@ -1009,6 +1009,10 @@
                           :dataset_query (mt/native-query {:query "SELECT TOTAL FROM ORDERS"})}
                          :model/Card {edited-model :id}
                          {:type :model :name "edited model" :dataset_query (orders-query)}
+                         :model/Card {on-native-model :id}
+                         {:type          :model
+                          :name          "model on the native model"
+                          :dataset_query (lib/query mp (lib.metadata/card mp native-model))}
                          :model/Metabot metabot {:name "curated metabot" :use_verified_content true}]
             (t2/update! :model/Card native-model
                         {:result_metadata [{:name "TOTAL" :display_name "Total" :base_type :type/Float
@@ -1016,7 +1020,7 @@
             (t2/update! :model/Card edited-model
                         {:result_metadata [{:name "RATING" :display_name "Rating" :base_type :type/Integer
                                             :id (mt/id :reviews :rating) :table_id (mt/id :reviews)}]})
-            (doseq [id [base-model stacked-model native-model edited-model]]
+            (doseq [id [base-model stacked-model native-model edited-model on-native-model]]
               (verify-card! id))
             (mt/with-temp [:model/Card {metric-id :id}
                            {:type          :metric
@@ -1032,6 +1036,9 @@
                 (is (thrown-with-msg? clojure.lang.ExceptionInfo #"column of a SQL question"
                                       (values "model" native-model total))
                     "a native definition names no tables, and its result metadata can map a column to any field")
+                (is (thrown-with-msg? clojure.lang.ExceptionInfo #"column of a SQL question"
+                                      (values "model" on-native-model total))
+                    "a model built on a SQL question gets the same answer")
                 (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only uses curated content"
                                       (values "metric" metric-id (mt/id :reviews :rating)))
                     "a metric's columns are judged by its definition, source cards included")))))))))
@@ -1301,7 +1308,8 @@
 
 (deftest curated-only-details-keep-related-tables-shown-or-curated-test
   (testing "a curated table's related tables are kept when listed with their columns, or when curated themselves;
-            an uncurated one listed by identity invites a read that is denied, so it is dropped; the total stays"
+            an uncurated one listed by identity invites a read that is denied, so it is dropped, and the total with
+            it, since it would count what was withheld"
     (mt/with-current-user (mt/user->id :crowberto)
       (mt/with-temp [:model/Metabot metabot {:name "curated metabot" :use_verified_content true}]
         (mt/with-temp-vals-in-db :model/Table (mt/id :orders) {:is_published true :data_layer :final}
@@ -1321,8 +1329,7 @@
                                         [:content :structured-output]))]
                   (is (= {:id                            (mt/id :orders)
                           :related_tables                [shown curated]
-                          :related_tables_without_fields [curated]
-                          :related_tables_total          60}
+                          :related_tables_without_fields [curated]}
                          (details metabot :internal)))
                   (is (= [shown curated raw] (:related_tables (details nil nil)))))))))))))
 
@@ -1372,45 +1379,69 @@
             (is (str/includes? out "not curated"))
             (is (not (str/includes? out "SELECT 2 AS Y")))))))))
 
+(def ^:private chart-series
+  {"Count" {:x            {:name "category" :type "string"}
+            :y            {:name "count" :type "number"}
+            :x_values     ["A" "B" "C" "D"]
+            :y_values     [42 53 51 54]
+            :display_name "Count"}})
+
+(defn- analyze-chart
+  "Run `analyze_chart` as a tool of `metabot` on the one chart config of the viewing-context `item`, seeded as the
+  agent seeds it: under the item's id, with the item as its owner, and `query` as the query that produced it."
+  [metabot item query]
+  (as-metabot metabot :internal
+              #(binding [tools.shared/*memory-atom*
+                         (atom {:state {:chart-configs
+                                        {(str (:id item)) {:display_type "row"
+                                                           :title        "Orders"
+                                                           :series       chart-series
+                                                           :query        query
+                                                           :owner        (select-keys item [:type :id])}}}})]
+                 (analyze-chart/analyze-chart-tool {:chart_config_id (str (:id item)) :deep false}))))
+
 (deftest analyze-chart-judges-the-viewed-card-test
-  (testing "a chart of a saved question is judged by the card, not by the query that produced it, and an ad hoc
-            chart whose query the user can't run is refused, since nothing runs after the check"
-    (let [series  {"Count" {:x            {:name "category" :type "string"}
-                            :y            {:name "count" :type "number"}
-                            :x_values     ["A" "B" "C" "D"]
-                            :y_values     [42 53 51 54]
-                            :display_name "Count"}}
-          orders  {:database (mt/id) :type :query :query {:source-table (mt/id :orders) :aggregation [[:count]]}}
-          analyze (fn [metabot item]
-                    (as-metabot metabot :internal
-                                #(binding [tools.shared/*memory-atom*
-                                           (atom {:state   {:chart-configs {(str (:id item)) {:display_type "row"
-                                                                                              :title        "Orders"
-                                                                                              :series       series
-                                                                                              :query        orders}}}
-                                                  :context {:user_is_viewing [item]}})]
-                                   (analyze-chart/analyze-chart-tool {:chart_config_id (str (:id item))
-                                                                      :deep            false}))))]
+  (testing "a chart of a saved question is judged by the card, and by the chart's query too once the user has
+            changed it"
+    (let [orders   {:database (mt/id) :type :query :query {:source-table (mt/id :orders) :aggregation [[:count]]}}
+          products {:database (mt/id) :type :query :query {:source-table (mt/id :products) :aggregation [[:count]]}}]
       (mt/with-current-user (mt/user->id :crowberto)
-        (mt/with-temp [:model/Card {verified :id} {:name "verified orders" :dataset_query (orders-query)}
-                       :model/Card {plain :id} {:name "plain orders" :dataset_query (orders-query)}
+        (mt/with-temp [:model/Card {verified :id} {:name "verified orders" :dataset_query orders}
+                       :model/Card {plain :id} {:name "plain orders" :dataset_query orders}
                        :model/Metabot metabot {:name "curated metabot" :use_verified_content true}]
           (verify-card! verified)
           (testing "a verified question over raw ORDERS is analyzed"
-            (is (str/includes? (:output (analyze metabot {:type "question" :id verified})) "Chart Analysis")))
+            (is (str/includes? (:output (analyze-chart metabot {:type "question" :id verified} orders))
+                               "Chart Analysis")))
+          (testing "the same question with its query changed to raw PRODUCTS is judged by that query"
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only uses curated content"
+                                  (analyze-chart metabot {:type "question" :id verified} products))))
           (mt/with-temp-vals-in-db :model/Table (mt/id :orders) {:is_published true :data_layer :final}
             (testing "an unverified question over curated ORDERS is refused"
               (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only uses curated content"
-                                    (analyze metabot {:type "question" :id plain})))))))
-      (testing "an ad hoc chart over a table the user can't query is refused, curated or not"
-        (mt/with-temp [:model/Metabot metabot {:name "curated metabot" :use_verified_content true}]
+                                    (analyze-chart metabot {:type "question" :id plain} orders))))))))))
+
+(deftest analyze-chart-refuses-what-the-user-cannot-reach-test
+  (testing "with nothing running after the check, an ad hoc chart whose query the user can't run, and a chart of a
+            card they can't read, are refused the same way whatever their curation"
+    (let [orders {:database (mt/id) :type :query :query {:source-table (mt/id :orders) :aggregation [[:count]]}}]
+      (mt/with-non-admin-groups-no-root-collection-perms
+        (mt/with-temp [:model/Collection {hidden :id} {:name "hidden"}
+                       :model/Card {verified :id} {:collection_id hidden :name "verified orders" :dataset_query orders}
+                       :model/Card {plain :id} {:collection_id hidden :name "plain orders" :dataset_query orders}
+                       :model/Metabot metabot {:name "curated metabot" :use_verified_content true}]
+          (mt/with-current-user (mt/user->id :crowberto)
+            (verify-card! verified))
           (mt/with-no-data-perms-for-all-users!
             (mt/with-current-user (mt/user->id :rasta)
-              (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only uses curated content"
-                                    (analyze metabot {:type "adhoc" :id "q1" :query orders})))
-              (mt/with-temp-vals-in-db :model/Table (mt/id :orders) {:is_published true :data_layer :final}
+              (doseq [item [{:type "adhoc" :id "q1"} {:type "question" :id verified} {:type "question" :id plain}]]
                 (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only uses curated content"
-                                      (analyze metabot {:type "adhoc" :id "q1" :query orders})))))))))))
+                                      (analyze-chart metabot item orders))
+                    (pr-str item))
+                (mt/with-temp-vals-in-db :model/Table (mt/id :orders) {:is_published true :data_layer :final}
+                  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only uses curated content"
+                                        (analyze-chart metabot item orders))
+                      (pr-str item)))))))))))
 
 (deftest run-query-judges-the-structured-part-of-a-mixed-query-test
   (testing "a notebook query over raw ORDERS with a native join is judged on ORDERS; the SQL it holds is passed to
@@ -1448,13 +1479,50 @@
         (mt/with-temp [:model/Measure {live :id} {:name "orders count" :table_id (mt/id :orders)
                                                   :definition orders-count}
                        :model/Measure {trashed :id} {:name "trashed orders count" :table_id (mt/id :orders)
-                                                     :archived true :definition orders-count}]
+                                                     :archived true :definition orders-count}
+                       :model/Metabot metabot {:name "curated metabot" :use_verified_content true}
+                       :model/MetabotConversation {conversation-id :id} {:user_id (mt/user->id :crowberto)}]
           (mt/with-temp-vals-in-db :model/Table (mt/id :orders) {:is_published true :data_layer :final}
             (let [using (fn [measure-id]
                           (assoc-in (orders-query) [:stages 0 :aggregation]
-                                    [[:measure {:lib/uuid (str (random-uuid))} measure-id]]))]
+                                    [[:measure {:lib/uuid (str (random-uuid))} measure-id]]))
+                  run   (fn [query]
+                          (mt/with-temporary-setting-values [metabot-query-execution-enabled? true]
+                            (as-metabot metabot :internal
+                                        #(binding [tools.shared/*memory-atom*
+                                                   (atom {:conversation-id conversation-id
+                                                          :state           {:queries {"q" query}}
+                                                          :context         {}})]
+                                           (run-query/run-query-tool {:query_id "q"})))))]
               (is (= [] (curation/uncurated-query-sources (using live))))
-              (is (= [[:measure trashed]] (curation/uncurated-query-sources (using trashed)))))))))))
+              (is (= [[:measure trashed]] (curation/uncurated-query-sources (using trashed))))
+              (is (nil? (curation/check-curated-query! "q" (using live))))
+              (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only uses curated content"
+                                    (curation/check-curated-query! "q" (using trashed))))
+              (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only uses curated content" (run (using trashed)))
+                  "run_query refuses it, which the query processor would not"))))))))
+
+(deftest conversation-query-check-judges-the-preprocessed-query-test
+  (testing "a query over a readable card joined to a table the user can't query is left to the query processor,
+            whatever the table's curation, so the answer reveals nothing"
+    (mt/with-non-admin-groups-no-root-collection-perms
+      (mt/with-temp [:model/Collection {readable :id} {:name "readable"}
+                     :model/Card {model :id} {:collection_id readable :type :model :name "orders model"
+                                              :dataset_query (orders-query)}]
+        (perms/grant-collection-read-permissions! (perms-group/all-users) readable)
+        (mt/with-no-data-perms-for-all-users!
+          (mt/with-current-user (mt/user->id :rasta)
+            (let [mp     (mt/metadata-provider)
+                  joined (lib/join (lib/query mp (lib.metadata/card mp model))
+                                   (lib/join-clause (lib.metadata/table mp (mt/id :products))
+                                                    [(lib/= (lib.metadata/field mp (mt/id :orders :product_id))
+                                                            (lib.metadata/field mp (mt/id :products :id)))]))]
+              (is (nil? (curation/check-curated-query! "q" joined)) "raw PRODUCTS, not judged")
+              (mt/with-temp-vals-in-db :model/Table (mt/id :products) {:is_published true :data_layer :final}
+                (is (nil? (curation/check-curated-query! "q" joined)) "curated PRODUCTS, not judged either"))
+              (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only uses curated content"
+                                    (curation/check-curated-query! "q" joined {:unreachable :deny}))
+                  "and refused where nothing runs after the check"))))))))
 
 (deftest unreadable-tables-answer-the-same-whether-curated-test
   (testing "for a user who can't read the table, every gated path answers the same for a curated and an uncurated
@@ -1465,32 +1533,57 @@
                    :model/Table {raw :id} {:db_id db-id :name "hidden_raw" :active true}
                    :model/Field _ {:table_id published :name "A" :base_type :type/Integer}
                    :model/Field _ {:table_id raw :name "A" :base_type :type/Integer}
-                   :model/Metabot metabot {:name "curated metabot" :use_verified_content true}]
+                   :model/Metabot metabot {:name "curated metabot" :use_verified_content true}
+                   :model/MetabotConversation {conversation-id :id} {:user_id (mt/user->id :rasta)}]
       (mt/with-no-data-perms-for-all-users!
         (mt/with-current-user (mt/user->id :rasta)
-          (let [answer (fn [id f]
+          (let [field  (fn [id] (t2/select-one-fn :id :model/Field :table_id id))
+                mask   (fn [text id] (str/replace text (re-pattern (str "\\b" id "\\b")) "<ID>"))
+                answer (fn [id f]
                          (-> (try
                                (let [r (as-metabot metabot :internal #(f id))]
                                  (or (:output r) (:error r) (pr-str (dissoc r :structured-output))))
                                (catch Exception e
                                  (ex-message e)))
-                             (str/replace (str id) "<ID>")))
-                same?  (fn [label f]
+                             (mask id)
+                             (mask (field id))))
+                same?  (fn [label f & {:keys [expect]}]
                          (let [a (answer published f)
                                b (answer raw f)]
                            (testing label
                              (is (= a b))
-                             (is (not (str/includes? a "only uses curated content")) a))))]
+                             (if expect
+                               (is (re-find expect a) a)
+                               (do (is (not (str/blank? a)))
+                                   (is (not (str/includes? a "only uses curated content")) a))))))
+                query  (fn [id] {:database db-id :type :query :query {:source-table id}})]
             (same? "read_resource" (fn [id] (first (read-uris metabot :internal (str "metabase://table/" id)))))
             (same? "list_available_fields" #(metadata-tools/list-available-fields-tool {:table_ids [%]}))
             (same? "get_field_values" (fn [id]
-                                        (metadata-tools/get-field-values-tool
-                                         {:data_source "table"
-                                          :source_id   id
-                                          :field_id    (t2/select-one-fn :id :model/Field :table_id id)})))
+                                        (metadata-tools/get-field-values-tool {:data_source "table"
+                                                                               :source_id   id
+                                                                               :field_id    (field id)})))
             (same? "create_autogenerated_dashboard"
                    #(autogen/create-autogenerated-dashboard-tool {:source {:table_id %}}))
-            (same? "viewing context"
+            (same? "run_query over a conversation query"
+                   (fn [id]
+                     (mt/with-temporary-setting-values [metabot-query-execution-enabled? true]
+                       (binding [tools.shared/*memory-atom* (atom {:conversation-id conversation-id
+                                                                   :state           {:queries {"q" (query id)}}
+                                                                   :context         {}})]
+                         (run-query/run-query-tool {:query_id "q"})))))
+            ;; with nothing running after the check, an unreachable chart is refused, the same way for both
+            (same? "analyze_chart over an ad hoc query"
+                   (fn [id] (analyze-chart metabot {:type "adhoc" :id "q"} (query id)))
+                   :expect #"not available")
+            ;; an unreadable item is left out of the viewing context
+            (same? "viewing context, the table"
                    (fn [id] {:output (user-context/format-viewing-context
                                       {:curated_only    true
-                                       :user_is_viewing [{:type "table" :id id}]})}))))))))
+                                       :user_is_viewing [{:type "table" :id id}]})})
+                   :expect #"^$")
+            (same? "viewing context, an ad hoc query over the table"
+                   (fn [id] {:output (user-context/format-viewing-context
+                                      {:curated_only    true
+                                       :user_is_viewing [{:type "adhoc" :id "q" :query (query id)}]})})
+                   :expect #"not shown")))))))

@@ -614,7 +614,7 @@
   "The presentable columns of the active Tables in `schema` of the Database with `database-id`, ordered by name."
   [database-id :- ::lib.schema.id/database
    schema :- [:maybe :string]]
-  (t2/select [:model/Table :id :name :display_name :schema :db_id :description]
+  (t2/select [:model/Table :id :name :display_name :schema :db_id :description :is_published :collection_id]
              :db_id database-id
              :schema schema
              :active true

@@ -5,8 +5,9 @@
   series data in chart_configs, which is seeded into agent memory during
   initialization. This avoids re-executing queries."
   (:require
-   [clojure.string :as str]
    [metabase.interestingness.core :as interestingness]
+   [metabase.lib-be.core :as lib-be]
+   [metabase.lib.equality :as lib.equality]
    [metabase.metabot.curation :as curation]
    [metabase.metabot.db :as metabot.db]
    [metabase.metabot.scope :as scope]
@@ -14,7 +15,6 @@
    [metabase.metabot.tools.recoverable.common :as recoverable.common]
    [metabase.metabot.tools.shared :as shared]
    [metabase.metabot.tools.util :as metabot.tools.u]
-   [metabase.models.interface :as mi]
    [metabase.util.malli :as mu]
    [tech.v3.resource :as resource]))
 
@@ -55,38 +55,39 @@ Do not use headers (##). Do not list statistics. Do not analyze series separatel
   (some-> (get (shared/current-chart-configs-state) chart-config-id)
           stringify-series-keys))
 
-(defn- chart-owner
-  "The viewing-context item whose chart configs `chart-config-id` names: the ids are `{item-id}` for one config and
-  `{item-id}-{index}` for several (see `metabase.metabot.agent.core`)."
-  [chart-config-id]
-  (some (fn [{:keys [id] :as item}]
-          (when (and id (or (= chart-config-id (str id)) (str/starts-with? chart-config-id (str id "-"))))
-            item))
-        (get-in (shared/current-memory) [:context :user_is_viewing])))
+(defn- same-query?
+  "Whether `a` and `b`, queries in any form, are the same query: false when either can't be normalized."
+  [a b]
+  (try
+    (lib.equality/= (lib-be/normalize-query a) (lib-be/normalize-query b))
+    (catch Exception _
+      false)))
 
 (defn- check-curated-chart!
-  "Under [[shared/curated-only?]], refuse the chart `chart-config` unless this Metabot may use what it shows, since
-  its series rows reach the model as a query's rows would. A chart of a saved question, model, or metric is judged
-  by that card, as `run_query` judges it; any other by the query that produced it, with no query processor behind
-  the check to answer for an unreachable one. A chart that carries neither can't be judged and is refused."
-  [chart-config-id chart-config]
+  "Under [[shared/curated-only?]], refuse the chart `chart-config` unless this Metabot may use what it shows. A
+  chart of a saved question, model, or metric (its `:owner`) is judged by that card, and by the chart's own query
+  too when the user has changed it since; any other chart by its query, with nothing passed through for a query
+  the user can't run, since no query processor runs after the check. A chart that carries neither is refused."
+  [chart-config-id {:keys [owner query] :as _chart-config}]
   (when (shared/curated-only?)
-    (let [label            (str "chart " chart-config-id)
-          {:keys [type id]} (chart-owner chart-config-id)
-          card-id          (when (contains? #{"question" "model" "metric"} (some-> type name))
-                             (if (string? id) (parse-long id) id))
-          card             (when (pos-int? card-id) (metabot.db/card card-id))]
+    (let [label   (str "chart " chart-config-id)
+          refuse! #(recoverable.common/not-curated! {:label label})
+          judge-query! #(curation/check-curated-query! label query {:native :allow :unreachable :deny})
+          card-id (let [{:keys [type id]} owner]
+                    (when (contains? #{"question" "model" "metric"} (some-> type name))
+                      (if (string? id) (parse-long id) id)))]
       (cond
-        card-id
-        (if (some-> card mi/can-read?)
-          (curation/check-curated-subject! label [(if (= :metric (:type card)) "metric" "card") card-id])
-          (recoverable.common/not-curated! {:label label}))
+        (pos-int? card-id)
+        (case (curation/readable-subject-verdict ["card" card-id])
+          :curated (when (and query (not (same-query? query (:dataset_query (metabot.db/card card-id)))))
+                     (judge-query!))
+          (refuse!))
 
-        (:query chart-config)
-        (curation/check-curated-query! label (:query chart-config) {:native :allow :unreachable :deny})
+        query
+        (judge-query!)
 
         :else
-        (recoverable.common/not-curated! {:label label})))))
+        (refuse!)))))
 
 (defn- non-numeric-y-value?
   "True when `y-values` contains a non-nil value that is not a number.

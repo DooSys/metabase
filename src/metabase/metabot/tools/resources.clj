@@ -651,24 +651,27 @@
                         :model/Segment (metabot.db/segment-table-id id))]
     (check-table-resource-database table-id)))
 
-(defn- curated-or-shown-related-tables
-  "The related `tables` of a table's details a curated-only Metabot may see: those listed with their columns, which
-   it may join as shown, and those it could read on its own, since a `table/{id}` read of any other is denied."
-  [tables]
-  (let [curated (curation/curated-ids (map (fn [{:keys [id]}] ["table" id]) tables))]
-    (filterv (fn [{:keys [id fields]}] (or (seq fields) (contains? curated ["table" id]))) tables)))
+(defn- trim-related-tables
+  "`details` with its related tables trimmed to what a curated-only Metabot may see: those listed with their
+   columns, which it may join as shown, and those it could read on its own, since a `table/{id}` read of any other
+   is denied. The total, which the renderer turns into a truncation notice, stays only while nothing was withheld."
+  [{:keys [related_tables related_tables_without_fields] :as details}]
+  (let [listed  (concat related_tables related_tables_without_fields)
+        curated (curation/curated-ids (map (fn [{:keys [id]}] ["table" id]) listed))
+        keep?   (fn [{:keys [id fields]}] (or (seq fields) (contains? curated ["table" id])))
+        kept    (filterv keep? listed)]
+    (cond-> details
+      (seq related_tables)                (update :related_tables #(filterv keep? %))
+      (seq related_tables_without_fields) (update :related_tables_without_fields #(filterv keep? %))
+      (< (count kept) (count listed))     (dissoc :related_tables_total))))
 
 (defn trim-details-for-curated-only
   "A table's or card's `details` trimmed to what a curated-only Metabot may use: the embedded metrics `metric/{id}`
    would deny are dropped, a card's exported definition is withheld (see [[curation/without-definition]]), and
-   related tables are kept only as [[curated-or-shown-related-tables]] keeps them. Exported for the viewing
-   context, which renders the same details."
+   related tables are trimmed (see [[trim-related-tables]])."
   [details]
-  (cond-> (curation/without-definition details)
-    (seq (:metrics details))                       (update :metrics curation/usable-metrics)
-    (seq (:related_tables details))                (update :related_tables curated-or-shown-related-tables)
-    (seq (:related_tables_without_fields details)) (update :related_tables_without_fields
-                                                           curated-or-shown-related-tables)))
+  (cond-> (trim-related-tables (curation/without-definition details))
+    (seq (:metrics details)) (update :metrics curation/usable-metrics)))
 
 (defn- curated-only-details
   "Under [[shared/curated-only?]], `result` with its details trimmed by [[trim-details-for-curated-only]]."

@@ -8,7 +8,6 @@
    [metabase.lib-be.core :as lib-be]
    [metabase.lib.core :as lib]
    [metabase.metabot.curation :as curation]
-   [metabase.metabot.db :as metabot.db]
    [metabase.metabot.query-export :as query-export]
    [metabase.metabot.tmpl :as te]
    [metabase.metabot.tools.entity-details :as entity-details]
@@ -16,7 +15,6 @@
    [metabase.metabot.tools.shared.content-store :as shared.content-store]
    [metabase.metabot.tools.shared.llm-shape :as llm-shape]
    [metabase.metabot.util :as metabot.u]
-   [metabase.models.interface :as mi]
    [metabase.util :as u]
    [metabase.util.log :as log])
   (:import
@@ -151,10 +149,11 @@
             (te/field (:type entity) (str "ID: " (:id entity)))))
 
 (defn- with-curated-only
-  "`items` with the session's curated-only verdict of `entity` on each, so nested entities are judged too."
-  [entity items]
+  "`items`, the tables a viewed query `entity` uses, with the session's curated-only verdict on each, so they are
+  judged too, unless the query itself passed and so may use them (`query-ok?`)."
+  [entity query-ok? items]
   (cond->> items
-    (:curated_only entity) (map #(assoc % :curated_only true))))
+    (and (:curated_only entity) (not query-ok?)) (map #(assoc % :curated_only true))))
 
 (defn- uncurated-viewed-entity?
   "Whether `entity`, which the current user can read, is one a curated-only Metabot may not use. `:curated_only` on
@@ -263,19 +262,19 @@
        (te/field "Query error" (te/code error)))
      (when-let [config-ids (format-chart-config-ids item)]
        (te/field "Chart Config IDs (for analyze_chart tool)" config-ids))
+     ;; SQL is outside the rule, so the tables it names are shown as the SQL already names them
      (te/field "Tables used" (some->> (:used_tables item)
-                                      (with-curated-only item)
+                                      (with-curated-only item true)
                                       (map format-entity)
                                       te/lines)))))
 
 (defn- uncurated-saved-native-question?
-  "Whether `entity`, a viewed question holding SQL, is a saved question the user can read that a curated-only
-  Metabot may not use: judged by the card, as `run_query` and `read_resource` judge it, after the read check."
+  "Whether `entity`, a viewed question holding SQL, names a saved question the user can read that a curated-only
+  Metabot may not use."
   [{:keys [id] :as entity}]
-  (boolean
-   (when (and (:curated_only entity) (pos-int? id))
-     (when (some-> (metabot.db/card id) mi/can-read?)
-       (not (curation/subject-curated? ["card" id]))))))
+  (and (:curated_only entity)
+       (pos-int? id)
+       (= :uncurated (curation/readable-subject-verdict ["card" id]))))
 
 (defmethod format-entity "question"
   [entity]
@@ -321,19 +320,23 @@
   [item]
   (if (native-query-item? item)
     (format-native-query item)
-    (te/lines "The user is currently in the notebook editor viewing a query."
-              (te/field "Query ID" (:id item))
-              (te/field "Database ID" (get-in item [:query :database]))
-              ;; the exported query names the sources it reads, which a curated-only Metabot may not see
-              (te/field "Query" (if (and (:curated_only item) (not (curation/query-curated? (:query item))))
-                                  "(not shown: the query reads content this Metabot may not use)"
-                                  (exported-query-text (:query item))))
-              (when-let [config-ids (format-chart-config-ids item)]
-                (te/field "Chart Config IDs (for analyze_chart tool)" config-ids))
-              (te/field "Tables used" (some->> (:used_tables item)
-                                               (with-curated-only item)
-                                               (map format-entity)
-                                               te/lines)))))
+    (let [query-ok? (or (not (:curated_only item)) (curation/query-curated? (:query item)))]
+      (te/lines "The user is currently in the notebook editor viewing a query."
+                (te/field "Query ID" (:id item))
+                (te/field "Database ID" (get-in item [:query :database]))
+                ;; the exported query names the sources it reads, which a curated-only Metabot may not see
+                (te/field "Query" (if query-ok?
+                                    (exported-query-text (:query item))
+                                    "(not shown: the query reads content this Metabot may not use)"))
+                ;; `analyze_chart` refuses the chart of a withheld query, so its id isn't offered
+                (when query-ok?
+                  (when-let [config-ids (format-chart-config-ids item)]
+                    (te/field "Chart Config IDs (for analyze_chart tool)" config-ids)))
+                ;; a query that passed may use its tables, joins one FK hop out included, so they are shown
+                (te/field "Tables used" (some->> (:used_tables item)
+                                                 (with-curated-only item query-ok?)
+                                                 (map format-entity)
+                                                 te/lines))))))
 
 (defmethod format-entity "code_editor"
   [{:keys [buffers]}]

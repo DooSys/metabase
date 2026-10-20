@@ -94,7 +94,12 @@
    [:series {:optional true} [:maybe (ms/string-keyed-map ::series-config)]]
    [:timeline_events {:optional true} [:maybe [:sequential ::chart-timeline-event]]]
    [:query {:optional true} [:maybe ::query]]
-   [:display_type {:optional true} [:maybe [:or :string :keyword]]]])
+   [:display_type {:optional true} [:maybe [:or :string :keyword]]]
+   ;; the viewing-context item the chart came from, stamped by the agent when it seeds the config, so the chart is
+   ;; judged by that item in a later turn too
+   [:owner {:optional true} [:maybe [:map {:closed true}
+                                     [:type {:optional true} [:maybe [:or :string :keyword]]]
+                                     [:id {:optional true} [:maybe [:or :int :string]]]]]]])
 
 (mr/def ::chart
   [:map {:closed true}

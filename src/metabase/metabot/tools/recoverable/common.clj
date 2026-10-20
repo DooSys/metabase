@@ -47,10 +47,11 @@
              [:label :string]]}
   [{:keys [label]}]
   {:message  (str "`" label "` is not available: this Metabot only uses curated content (verified, official, or "
-                  "Library content, and authoritative tables). Do not retry it, and do not retry another entity "
-                  "this check refused; tell the user it is not available to this Metabot.")
+                  "Library content, and authoritative tables). Do not retry it or another entity this check "
+                  "refused.")
    :recovery [{:uses #{"search"}
-               :text "Call `search` to find curated tables, models, or metrics and use one of those instead."}]})
+               :text (str "Call `search` to find curated tables, models, or metrics and use one of those instead; "
+                          "if none fits, tell the user the content is not available to this Metabot.")}]})
 
 (defrecoverable native-card-column!
   "A column of a SQL question has no field values for a curated-only Metabot: a native definition names no tables
